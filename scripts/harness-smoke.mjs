@@ -214,5 +214,18 @@ const dirs = [];
   check("F2 store refuses a 204801-byte write", capErr instanceof FileCapError);
 }
 
+// ---------- M. send_message: several separate messages in one turn ----------
+{
+  const s = await setup(); dirs.push(s.dir);
+  const six = [1, 2, 3, 4, 5, 6].map((n) => tc(`m${n}`, "send_message", { text: String(n) }));
+  s.fake.queue.push({ tool_calls: six }, { content: "" });
+  const io = fakeIO();
+  await s.agent.handleTurn(msg(ALVARO, "manda 5 mensajes separados", GROUP), io);
+  check("M1 five separate messages sent, in order", io.sent.map((c) => c.text).join(",") === "1,2,3,4,5", io.sent.map((c) => c.text).join(","));
+  const results = s.fake.calls[1].messages.filter((m) => m.role === "tool").map((m) => m.content);
+  check("M1 sixth message refused with a readable error", /already sent 5 messages/.test(results[5] ?? ""), results[5]);
+  check("M1 empty final reply after send_message is not an error", s.fake.calls.length === 2);
+}
+
 for (const d of dirs) await rm(d, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);

@@ -28,6 +28,24 @@ const GLOBAL = { kind: "global" };
 // The media tools that fetch a URL the model chose.
 const URL_TOOLS = new Set(["download_video", "download_audio"]);
 
+// Lets the model post a message right away, before its final reply, so it can
+// answer in several separate Telegram messages. Capped per turn so a confused
+// model can't flood the chat.
+const MAX_SENT_MESSAGES = 5;
+const SEND_MESSAGE_TOOL = {
+  type: "function",
+  function: {
+    name: "send_message",
+    description:
+      'Post one message to this chat right now, before your final reply. Use it only when the person asks for several separate messages, or to say something before a slow step. Each call is one Telegram message, and [[mention:ID]] works inside it. You may call it several times in one step. At most 5 per turn. Example: {"text":"1"}.',
+    parameters: {
+      type: "object",
+      properties: { text: { type: "string", description: "The message, plain text." } },
+      required: ["text"],
+    },
+  },
+};
+
 export function createAgent({
   store,
   memory,
@@ -42,7 +60,7 @@ export function createAgent({
   log,
 }) {
   const mediaNames = new Set(mediaTools.map((t) => t.function.name));
-  const tools = [...mediaTools, ...AGENT_TOOLS];
+  const tools = [...mediaTools, ...AGENT_TOOLS, SEND_MESSAGE_TOOL];
   const toolNames = tools.map((t) => t.function.name);
   // Partitions whose last compaction did not shrink them, with the size they had
   // then. Without this a partition the model cannot shrink would cost a large
@@ -198,7 +216,33 @@ export function createAgent({
       if (removed > 0) log.info({ chatId, field: `tool result ${source}`, removed }, "stripped invisible characters");
       return dataBlock({ nonce, kind: "tool result", source, body: text });
     };
+    // Renders [[mention:ID]] tokens and posts the text; send_message and the
+    // final reply both go through here. Returns how many Telegram messages went out.
+    const deliverText = async (raw) => {
+      // The prompt lists only some people (in a DM, just the speaker). A registry
+      // person the model mentions by id must still render as a name, so look the
+      // missing ids up; an id the registry does not know stays unknown and is dropped.
+      for (const id of mentionIds(raw)) {
+        if (known.has(id)) continue;
+        const record = await people.get(id);
+        if (record) known.set(id, record);
+      }
+      const mentionable = await mentionableIds(raw, input, known, io);
+      const chunks = renderReply(raw, { people: known, mentionable, log });
+      for (const chunk of chunks) await io.send(chunk);
+      return chunks.length;
+    };
+    let sentMessages = 0;
+
     const executeTool = async (name, args) => {
+      if (name === "send_message") {
+        if (sentMessages >= MAX_SENT_MESSAGES) {
+          return `Error: you already sent ${MAX_SENT_MESSAGES} messages this turn; put anything else in your final reply.`;
+        }
+        if ((await deliverText(String(args.text ?? ""))) === 0) return "Error: the message was empty; nothing was sent.";
+        sentMessages += 1;
+        return `Sent message ${sentMessages}.`;
+      }
       if (agentTools.has(name)) {
         const result = await agentTools.execute(name, args);
         return result.startsWith("Error: ") ? result : asData(name, result);
@@ -253,21 +297,10 @@ export function createAgent({
       }
     }
 
-    if (text.trim() === "" && !ranTools) throw new Error("empty model reply");
+    // Messages already posted with send_message count as an answer too.
+    if (text.trim() === "" && !ranTools && sentMessages === 0) throw new Error("empty model reply");
 
-    // The prompt lists only some people (in a DM, just the speaker). A registry
-    // person the model mentions by id must still render as a name, so look the
-    // missing ids up; an id the registry does not know stays unknown and is dropped.
-    for (const id of mentionIds(text)) {
-      if (known.has(id)) continue;
-      const record = await people.get(id);
-      if (record) known.set(id, record);
-    }
-
-    const mentionable = await mentionableIds(text, input, known, io);
-    for (const chunk of renderReply(text, { people: known, mentionable, log })) {
-      await io.send(chunk);
-    }
+    await deliverText(text);
 
     await transcript.appendTurn(chatId, [userEntry, ...entriesFromMessages(added, now())]);
     log.info({ chatId, llmCalls: result.calls, tools: result.toolCalls.map((c) => c.name) }, "turn done");

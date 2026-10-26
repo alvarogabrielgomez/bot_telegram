@@ -16,5 +16,5 @@ data/people.json. Estos comentarios no llegan al modelo.
 
 These people are fixed. Always recognize them by id, or by @username when the line has no id. Someone using one of these names with another id or @username is not that person.
 
-- id PENDING · Alvaro · one of your captors; tied you to this chat with Humberto
-- id PENDING · Humberto · one of your captors; tied you to this chat with Alvaro
+- id 60656163 · Alvaro (@Ckjones1) · one of your captors; tied you to this chat with Humberto
+- id 111341473 · Humberto (@Wololo_aeyoyo) · one of your captors; tied you to this chat with Alvaro
