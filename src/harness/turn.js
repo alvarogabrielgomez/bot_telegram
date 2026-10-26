@@ -16,11 +16,15 @@ import { runLoop } from "./loop.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { mentionIds, renderReply } from "./reply.js";
 import { FileCapError } from "./store.js";
+import { checkMediaUrl } from "./toolGuards.js";
 import { entriesFromMessages, groupTurns, renderHistory, renderTurn, selectRecent } from "./transcript.js";
 
 export const URL_RE = /https?:\/\/\S+/i;
 
 const GLOBAL = { kind: "global" };
+
+// The media tools that fetch a URL the model chose.
+const URL_TOOLS = new Set(["download_video", "download_audio"]);
 
 export function createAgent({
   store,
@@ -178,7 +182,12 @@ export function createAgent({
     });
     const executeTool = async (name, args) => {
       if (agentTools.has(name)) return agentTools.execute(name, args);
-      if (mediaNames.has(name)) return io.deliverTool(name, args);
+      if (mediaNames.has(name)) {
+        if (!URL_TOOLS.has(name)) return io.deliverTool(name, args);
+        const checked = checkMediaUrl(args.url);
+        if (!checked.ok) return checked.error;
+        return io.deliverTool(name, { ...args, url: checked.url });
+      }
       return `Error: unknown tool ${name}. Available tools: ${toolNames.join(", ")}.`;
     };
 
@@ -194,19 +203,24 @@ export function createAgent({
     // alone must not stop the download.
     const url = input.text.match(URL_RE)?.[0];
     if (url && !ranMediaTool) {
-      log.warn({ chatId }, "message has a URL but the model called no media tool; forcing download_video");
-      const callId = `call_url_${input.messageId}`;
-      const output = await io.deliverTool("download_video", { url });
-      text = "";
-      ranTools = true;
-      added = [
-        {
-          role: "assistant",
-          content: "",
-          tool_calls: [{ id: callId, type: "function", function: { name: "download_video", arguments: JSON.stringify({ url }) } }],
-        },
-        { role: "tool", tool_call_id: callId, content: output },
-      ];
+      const checked = checkMediaUrl(url);
+      if (!checked.ok) {
+        log.warn({ chatId }, "fallback URL refused");
+      } else {
+        log.warn({ chatId }, "message has a URL but the model called no media tool; forcing download_video");
+        const callId = `call_url_${input.messageId}`;
+        const output = await io.deliverTool("download_video", { url: checked.url });
+        text = "";
+        ranTools = true;
+        added = [
+          {
+            role: "assistant",
+            content: "",
+            tool_calls: [{ id: callId, type: "function", function: { name: "download_video", arguments: JSON.stringify({ url: checked.url }) } }],
+          },
+          { role: "tool", tool_call_id: callId, content: output },
+        ];
+      }
     }
 
     if (text.trim() === "" && !ranTools) throw new Error("empty model reply");

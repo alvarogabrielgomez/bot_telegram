@@ -3,7 +3,7 @@
 // stay in src/tools; these four never leave the chat they run in.
 
 import { truncate } from "./limits.js";
-import { MemoryError, partitionLabel } from "./memory.js";
+import { isVisible, MemoryError, partitionLabel } from "./memory.js";
 
 // Descriptions are written for someone new on the team: what the tool does,
 // when to use it, and one example call.
@@ -125,10 +125,23 @@ export function createAgentToolExecutor({ memory, people, telegramInfo, turn }) 
       .join("\n");
   }
 
+  // Least privilege: a member deletes what they wrote, or what is about them.
+  // Nothing else, so an injected "forget everything about X" cannot wipe what
+  // another member left.
+  const mayForget = (entry, partition) =>
+    entry.by === turn.speakerId || (partition.kind === "user" && partition.id === turn.speakerId);
+
   async function forget({ id }) {
     const wanted = String(id ?? "").replace(/^\[|\]$/g, "");
-    const done = await memory.forget({ id: wanted, chatId: turn.chatId, partitions: await visiblePartitions() });
-    return done ? `Forgot [${wanted}].` : `Error: no memory with id ${wanted} is visible from this chat.`;
+    // Visibility first: an entry from another private chat must read as "not found".
+    for (const partition of await visiblePartitions()) {
+      const entry = (await memory.readEntries(partition)).find((e) => e.id === wanted && isVisible(e, turn.chatId));
+      if (!entry) continue;
+      if (!mayForget(entry, partition)) return "Error: you can only forget memories you wrote or memories about you.";
+      await memory.forget({ id: wanted, chatId: turn.chatId, partitions: [partition] });
+      return `Forgot [${wanted}].`;
+    }
+    return `Error: no memory with id ${wanted} is visible from this chat.`;
   }
 
   async function info({ action, user_id: userId }) {
