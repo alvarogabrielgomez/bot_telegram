@@ -230,6 +230,16 @@ const dirs = [];
   const io2 = fakeIO();
   await s.agent.handleTurn(msg(ALVARO, "estás?", GROUP), io2);
   check("M2 final reply repeating a sent message goes out once", io2.sent.length === 1, io2.sent.map((c) => c.text).join(" | "));
+
+  // A group member who never wrote to the bot: not in people.json, but Telegram knows them.
+  s.fake.queue.push({ tool_calls: [tc("s1", "send_message", { text: "[[mention:99818129]], Alvaro te recuerda la partida" }), tc("s2", "send_message", { text: "[[mention:31337]] hola" })] }, { content: "" });
+  const io3 = fakeIO();
+  io3.memberPerson = async (id) => (id === 99818129 ? { id, firstName: "Santiago", lastName: null, username: "Tiago_08", displayName: "Santiago" } : null);
+  await s.agent.handleTurn(msg(ALVARO, "recuérdale a Santiago", GROUP), io3);
+  const santi = io3.sent[0];
+  check("M3 member outside people.json gets a real mention", santi?.text.startsWith("Santiago,") && santi.entities[0]?.user?.id === 99818129, JSON.stringify(santi));
+  const notes = s.fake.calls.at(-1).messages.filter((m) => m.role === "tool").map((m) => m.content).slice(-2);
+  check("M3 unknown id reported back to the model as dropped", /mention of id 31337 was dropped/.test(notes[1] ?? ""), notes[1]);
 }
 
 for (const d of dirs) await rm(d, { recursive: true, force: true });

@@ -125,10 +125,22 @@ export function createTelegramIO({ ctx, dispatch, log }) {
     }
   }
 
+  // The person behind an id, if they are in this chat right now. Lets the bot
+  // mention a member who never wrote to it (and so isn't in people.json).
+  async function memberPerson(userId) {
+    try {
+      const member = await ctx.telegram.getChatMember(chatId, userId);
+      return isPresentStatus(member) ? personFromUser(member.user) : null;
+    } catch (err) {
+      log.warn({ err, userId }, "could not look up a chat member; the mention will be dropped");
+      return null;
+    }
+  }
+
   // Entities carry the mentions, so no parse_mode is needed.
   async function send(chunk) {
     await ctx.reply(chunk.text, chunk.entities.length ? { entities: chunk.entities } : undefined);
   }
 
-  return { deliverTool, telegramInfo, isMember, send };
+  return { deliverTool, telegramInfo, isMember, memberPerson, send };
 }

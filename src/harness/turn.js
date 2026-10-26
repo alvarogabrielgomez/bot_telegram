@@ -221,16 +221,22 @@ export function createAgent({
     const deliverText = async (raw) => {
       // The prompt lists only some people (in a DM, just the speaker). A registry
       // person the model mentions by id must still render as a name, so look the
-      // missing ids up; an id the registry does not know stays unknown and is dropped.
+      // missing ids up. In a group, an id the registry doesn't know may still be a
+      // member who never wrote to the bot; Telegram can tell. Anything else is dropped.
       for (const id of mentionIds(raw)) {
         if (known.has(id)) continue;
-        const record = await people.get(id);
+        const record = (await people.get(id)) ?? (isPrivate ? null : await io.memberPerson?.(id));
         if (record) known.set(id, record);
       }
       const mentionable = await mentionableIds(raw, input, known, io);
       const chunks = renderReply(raw, { people: known, mentionable, log });
       for (const chunk of chunks) await io.send(chunk);
-      return chunks.length;
+      const ids = mentionIds(raw);
+      return {
+        sent: chunks.length,
+        dropped: ids.filter((id) => !known.has(id)),
+        plain: ids.filter((id) => known.has(id) && !mentionable.has(id)),
+      };
     };
     let sentMessages = 0;
     // Texts already posted with send_message, normalized, so the final reply
@@ -243,10 +249,15 @@ export function createAgent({
         if (sentMessages >= MAX_SENT_MESSAGES) {
           return `Error: you already sent ${MAX_SENT_MESSAGES} messages this turn; put anything else in your final reply.`;
         }
-        if ((await deliverText(String(args.text ?? ""))) === 0) return "Error: the message was empty; nothing was sent.";
+        const out = await deliverText(String(args.text ?? ""));
+        if (out.sent === 0) return "Error: the message was empty; nothing was sent.";
         sentMessages += 1;
         sentTexts.add(sameText(args.text));
-        return `Sent message ${sentMessages}.`;
+        // Tell the model when a mention didn't land, so it never claims a notice reached someone.
+        let note = "";
+        if (out.dropped.length) note += ` The mention of id ${out.dropped.join(", ")} was dropped: not in this chat or unknown.`;
+        if (out.plain.length) note += ` Id ${out.plain.join(", ")} appeared as a plain name, without a notification.`;
+        return `Sent message ${sentMessages}.${note}`;
       }
       if (agentTools.has(name)) {
         const result = await agentTools.execute(name, args);
