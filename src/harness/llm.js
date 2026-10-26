@@ -2,6 +2,7 @@
 // finish reason, so callers can tell a finished reply from one cut by the
 // length limit.
 
+import { LLM_TIMEOUT_MS } from "./limits.js";
 import { withSpan } from "../tracing.js";
 
 export function createChatCompletion({ baseUrl, model, apiKey, fetchImpl = fetch }) {
@@ -16,6 +17,7 @@ export function createChatCompletion({ baseUrl, model, apiKey, fetchImpl = fetch
         method: "POST",
         headers,
         body: JSON.stringify({ model, messages, ...(tools ? { tools } : {}) }),
+        signal: AbortSignal.timeout(LLM_TIMEOUT_MS),
       });
       const bodyText = await res.text();
       if (!res.ok) throw new Error(`LLM API error: ${res.status} ${bodyText}`);

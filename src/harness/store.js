@@ -1,6 +1,7 @@
 // File store for the agent harness: every read and write of agent data goes
 // through here, so the size cap, atomic writes and path guard apply uniformly.
 
+import { randomUUID } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 import { MAX_FILE_BYTES } from "./limits.js";
@@ -67,7 +68,8 @@ export function createStore({ root, log }) {
       }
     }
     // Write beside the target and rename, so a crash never leaves a half-written file.
-    const tmp = file + ".tmp";
+    // Each write gets its own temp name: two unlocked writes to one file must not share it.
+    const tmp = `${file}.${randomUUID()}.tmp`;
     await writeFile(tmp, content, "utf8");
     await rename(tmp, file);
   }
@@ -133,7 +135,8 @@ export function createStore({ root, log }) {
   async function list(relDir) {
     try {
       const entries = await readdir(pathOf(relDir), { withFileTypes: true });
-      return entries.filter((e) => e.isFile()).map((e) => e.name).sort();
+      // Temp files of in-flight (or crashed) writes are not entries.
+      return entries.filter((e) => e.isFile() && !e.name.endsWith(".tmp")).map((e) => e.name).sort();
     } catch (err) {
       if (isMissing(err)) return [];
       throw err;

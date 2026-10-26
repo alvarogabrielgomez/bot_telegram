@@ -28,6 +28,9 @@ export const PROMPT_FILES_WARN_BYTES = 32 * 1024;
 
 export const DEFAULT_MAX_LLM_CALLS = 5;
 
+// A hung LLM call must not hold a chat lock forever.
+export const LLM_TIMEOUT_MS = 120_000;
+
 // Cut `text` to `max` characters and tell the model how much was dropped and
 // what to do about it (`note`), so it can ask for a narrower result.
 export function truncate(text, max, note) {
