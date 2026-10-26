@@ -225,6 +225,11 @@ const dirs = [];
   const results = s.fake.calls[1].messages.filter((m) => m.role === "tool").map((m) => m.content);
   check("M1 sixth message refused with a readable error", /already sent 5 messages/.test(results[5] ?? ""), results[5]);
   check("M1 empty final reply after send_message is not an error", s.fake.calls.length === 2);
+
+  s.fake.queue.push({ tool_calls: [tc("d1", "send_message", { text: "Sí, estoy aquí." })] }, { content: "Sí, estoy  aquí." });
+  const io2 = fakeIO();
+  await s.agent.handleTurn(msg(ALVARO, "estás?", GROUP), io2);
+  check("M2 final reply repeating a sent message goes out once", io2.sent.length === 1, io2.sent.map((c) => c.text).join(" | "));
 }
 
 for (const d of dirs) await rm(d, { recursive: true, force: true });
