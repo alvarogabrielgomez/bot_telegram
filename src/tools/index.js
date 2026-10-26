@@ -42,7 +42,7 @@ export const TOOLS = [
       parameters: {
         type: "object",
         properties: {
-          song_query: { type: "string", description: "Song name and/or artist" },
+          song_query: { type: "string", description: "Song name and/or artist, or a Spotify track link (open.spotify.com/track/...)" },
           playlist_name: { type: "string", description: "Optional; defaults to configured playlist" }
         },
         required: ["song_query"]
@@ -80,7 +80,8 @@ function filenameFromContentDisposition(header) {
 
 /**
  * Execute a tool call from the router.
- * Returns { type: "text", text }, { type: "media", media, fallbackText },
+ * Returns { type: "text", text }, { type: "miss", text } (nothing found; the
+ * text goes only to the model), { type: "media", media, fallbackText },
  * or { type: "video", buffer, filename, mimeType, fallbackText }.
  */
 export async function dispatch(name, args) {
@@ -146,14 +147,14 @@ async function dispatchTool(name, args) {
     }
 
     case "add_to_spotify_playlist": {
-      const text = await addToPlaylist(args.song_query, args.playlist_name);
-      return { type: "text", text };
+      const { added, text } = await addToPlaylist(args.song_query, args.playlist_name);
+      return added ? { type: "text", text } : { type: "miss", text };
     }
 
     case "search_images": {
       const media = await searchImages(args.query);
       if (!media.length) {
-        return { type: "text", text: `No image results for "${args.query}".` };
+        return { type: "miss", text: `No image results for "${args.query}".` };
       }
       return { type: "media", media, fallbackText: `Found ${media.length} images for "${args.query}"` };
     }

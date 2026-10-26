@@ -62,21 +62,39 @@ async function resolvePlaylistId(playlistName) {
   return match?.id ?? config.spotify.defaultPlaylistId;
 }
 
+// A track link (open.spotify.com/track/<id>, also with an /intl-xx/ segment)
+// or a spotify:track:<id> URI names the exact track, so it skips the search.
+const TRACK_LINK_RE = /(?:open\.spotify\.com\/(?:intl-[a-z-]+\/)?track\/|spotify:track:)([A-Za-z0-9]{22})/i;
+
+async function findTrack(songQuery) {
+  const trackId = songQuery.match(TRACK_LINK_RE)?.[1];
+  if (trackId) {
+    try {
+      return await spotifyFetch(`/tracks/${trackId}`);
+    } catch (err) {
+      // A bad or unknown id is a miss, not a failure of the tool.
+      if (/: (400|404) /.test(err.message)) return null;
+      throw err;
+    }
+  }
+  const search = await spotifyFetch(
+    `/search?${new URLSearchParams({ q: songQuery, type: "track", limit: "1" })}`
+  );
+  return search.tracks?.items?.[0] ?? null;
+}
+
 /**
- * Search for a track and add the top hit to a playlist.
- * Returns a human-readable confirmation string.
+ * Find a track (by link or by search) and add it to a playlist.
+ * Returns { added, text }: text is the human-readable confirmation or miss.
  */
 export async function addToPlaylist(songQuery, playlistName) {
   if (!config.spotify.clientId || !config.spotify.refreshToken) {
     throw new Error("Spotify is not configured");
   }
 
-  const search = await spotifyFetch(
-    `/search?${new URLSearchParams({ q: songQuery, type: "track", limit: "1" })}`
-  );
-  const track = search.tracks?.items?.[0];
+  const track = await findTrack(songQuery);
   if (!track) {
-    return `No Spotify track found for "${songQuery}".`;
+    return { added: false, text: `No Spotify track found for "${songQuery}".` };
   }
 
   const playlistId = await resolvePlaylistId(playlistName);
@@ -91,5 +109,5 @@ export async function addToPlaylist(songQuery, playlistName) {
 
   const artists = track.artists.map((a) => a.name).join(", ");
   const playlistUrl = `https://open.spotify.com/playlist/${playlistId}`;
-  return `🎵 Added "${track.name}" by ${artists} to the playlist.\n${playlistUrl}`;
+  return { added: true, text: `🎵 Added "${track.name}" by ${artists} to the playlist.\n${playlistUrl}` };
 }

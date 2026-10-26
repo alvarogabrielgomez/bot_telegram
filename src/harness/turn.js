@@ -281,7 +281,9 @@ export function createAgent({
     // Memory tools don't count here: the model searches memory often, and that
     // alone must not stop the download.
     const url = input.text.match(URL_RE)?.[0];
-    if (url && !ranMediaTool) {
+    // yt-dlp can't download Spotify, so a Spotify link never forces a download.
+    const isSpotify = /^https?:\/\/open\.spotify\.com\//i.test(url ?? "");
+    if (url && !ranMediaTool && !isSpotify) {
       const checked = checkMediaUrl(url);
       if (!checked.ok) {
         log.warn({ chatId }, "fallback URL refused");
