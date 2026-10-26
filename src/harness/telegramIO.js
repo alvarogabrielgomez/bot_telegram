@@ -45,6 +45,13 @@ export function createTelegramIO({ ctx, dispatch, log }) {
     try {
       const result = await dispatch(name, args);
 
+      // A miss ("nothing found") goes only to the model, so it can retry or
+      // explain in one reply instead of every failed attempt landing in the chat.
+      if (result.type === "miss") {
+        await removePlaceholder();
+        return `Nothing was sent to the chat: ${result.text}`;
+      }
+
       if (result.type === "media") {
         await removePlaceholder();
         await ctx.replyWithMediaGroup(result.media);
