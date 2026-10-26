@@ -139,6 +139,10 @@ bot.on("text", async (ctx) => {
   );
 });
 
+// Without this a rejected handler, such as a Telegraf handlerTimeout, escapes
+// as an unhandled rejection and takes the process down.
+bot.catch((err, ctx) => logger.error({ err, updateId: ctx.update?.update_id }, "update handler failed"));
+
 bot.launch(() => {
   logger.info(
     { username: bot.botInfo?.username, model: config.llm.model, llmBaseUrl: config.llm.baseUrl },

@@ -5,7 +5,13 @@
 
 import { AGENT_TOOLS, createAgentToolExecutor } from "./agentTools.js";
 import { compactMemory, compactTranscript } from "./compaction.js";
-import { HISTORY_PROMPT_CHARS, MEMORY_COMPACT_BYTES, MEMORY_COMPACT_RETRY_BYTES, MEMORY_PROMPT_CHARS } from "./limits.js";
+import {
+  HISTORY_PROMPT_CHARS,
+  MEMORY_COMPACT_BYTES,
+  MEMORY_COMPACT_RETRY_BYTES,
+  MEMORY_PROMPT_CHARS,
+  TRANSCRIPT_COMPACT_BYTES,
+} from "./limits.js";
 import { runLoop } from "./loop.js";
 import { buildSystemPrompt } from "./prompt.js";
 import { mentionIds, renderReply } from "./reply.js";
@@ -36,6 +42,9 @@ export function createAgent({
   // then. Without this a partition the model cannot shrink would cost a large
   // LLM call after every single memory_save.
   const stuckAt = new Map();
+  // Same brake for transcripts, keyed by chat id: the size a transcript had when
+  // its last compaction left it above the threshold.
+  const transcriptStuckAt = new Map();
 
   // Only people who send a directed message enter the registry. A full registry
   // must not leave the bot silent, so that one error is logged and skipped.
@@ -96,11 +105,23 @@ export function createAgent({
     else stuckAt.set(key, await memory.byteSize(partition));
   }
 
+  async function compactChatTranscript(chatId) {
+    const size = await transcript.byteSize(chatId);
+    if (size <= TRANSCRIPT_COMPACT_BYTES) {
+      transcriptStuckAt.delete(chatId);
+      return;
+    }
+    const stuck = transcriptStuckAt.get(chatId);
+    if (stuck !== undefined && size < stuck + MEMORY_COMPACT_RETRY_BYTES) return;
+    if (await compactTranscript({ chatId, transcript, complete, timezone, log })) transcriptStuckAt.delete(chatId);
+    else transcriptStuckAt.set(chatId, await transcript.byteSize(chatId));
+  }
+
   // Runs after the reply is out, so a slow summary never delays the answer.
   // Failures are only logged: the data is still valid, just bigger than wanted.
   async function compactAfterReply(chatId, touched) {
     try {
-      await compactTranscript({ chatId, transcript, complete, timezone, log });
+      await compactChatTranscript(chatId);
     } catch (err) {
       log.warn({ err, chatId }, "transcript compaction failed");
     }
@@ -163,13 +184,16 @@ export function createAgent({
 
     const result = await runLoop({ messages, tools, complete, executeTool, maxCalls: maxLlmCalls });
     let { text, added } = result;
-    let ranTools = result.toolCalls.length > 0;
+    // Only media tools count as work that answers the user. A turn that ran just
+    // memory or telegram_info tools and ended with no text has said nothing.
+    const ranMediaTool = result.toolCalls.some((c) => mediaNames.has(c.name));
+    let ranTools = ranMediaTool;
 
     // Small models often answer a link with chat instead of calling a tool.
     // Memory tools don't count here: the model searches memory often, and that
     // alone must not stop the download.
     const url = input.text.match(URL_RE)?.[0];
-    if (url && !result.toolCalls.some((c) => mediaNames.has(c.name))) {
+    if (url && !ranMediaTool) {
       log.warn({ chatId }, "message has a URL but the model called no media tool; forcing download_video");
       const callId = `call_url_${input.messageId}`;
       const output = await io.deliverTool("download_video", { url });
@@ -186,6 +210,15 @@ export function createAgent({
     }
 
     if (text.trim() === "" && !ranTools) throw new Error("empty model reply");
+
+    // The prompt lists only some people (in a DM, just the speaker). A registry
+    // person the model mentions by id must still render as a name, so look the
+    // missing ids up; an id the registry does not know stays unknown and is dropped.
+    for (const id of mentionIds(text)) {
+      if (known.has(id)) continue;
+      const record = await people.get(id);
+      if (record) known.set(id, record);
+    }
 
     const mentionable = await mentionableIds(text, input, known, io);
     for (const chunk of renderReply(text, { people: known, mentionable })) {

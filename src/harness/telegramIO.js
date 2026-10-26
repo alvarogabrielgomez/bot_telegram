@@ -73,6 +73,7 @@ export function createTelegramIO({ ctx, dispatch, log }) {
         // message instead of telling the model something reached the chat that didn't.
         log.warn({ err }, "could not edit the placeholder message; sending the result as a new message");
         await ctx.reply(result.text);
+        await removePlaceholder();
       }
       return `Delivered to the user: ${result.text}`;
     } catch (err) {
