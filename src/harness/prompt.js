@@ -6,15 +6,18 @@ import { join } from "node:path";
 import { formatTime, personLabel } from "./identity.js";
 import { MAX_FILE_BYTES, PROMPT_FILES_WARN_BYTES } from "./limits.js";
 
-async function readPromptFile(dir, name) {
+async function readPromptFile(dir, name, { optional = false } = {}) {
   let text;
   try {
     text = await readFile(join(dir, name), "utf8");
   } catch (err) {
+    if (optional && err?.code === "ENOENT") return { text: "", bytes: 0 };
     const why = err?.code === "ENOENT" ? "the file is missing" : err.message;
     throw new Error(`Cannot load ${name} from ${dir}: ${why}`, { cause: err });
   }
   text = text.replace(/^﻿/, ""); // some Windows editors add a BOM
+  // HTML comments are notes for whoever edits the file; the model never sees them.
+  text = text.replace(/<!--[\s\S]*?-->/g, "").trim();
   const bytes = Buffer.byteLength(text, "utf8");
   if (bytes > MAX_FILE_BYTES) {
     throw new Error(`${name} is ${bytes} bytes, over the ${MAX_FILE_BYTES} byte cap`);
@@ -25,11 +28,13 @@ async function readPromptFile(dir, name) {
 export async function loadPromptFiles(dir, { log }) {
   const soul = await readPromptFile(dir, "soul.md");
   const system = await readPromptFile(dir, "system.md");
-  const total = soul.bytes + system.bytes;
+  // users.md: people the bot must never forget, pinned by Telegram id. Optional.
+  const users = await readPromptFile(dir, "users.md", { optional: true });
+  const total = soul.bytes + system.bytes + users.bytes;
   if (total > PROMPT_FILES_WARN_BYTES) {
-    log.warn({ bytes: total, warnAt: PROMPT_FILES_WARN_BYTES }, "soul.md and system.md together are large; every message pays for them");
+    log.warn({ bytes: total, warnAt: PROMPT_FILES_WARN_BYTES }, "soul.md, system.md and users.md together are large; every message pays for them");
   }
-  return { soul: soul.text, system: system.text };
+  return { soul: soul.text, system: system.text, users: users.text };
 }
 
 // One memory section: its lines, a pointer to what did not fit, or "(none)".
@@ -47,8 +52,8 @@ function chatLine(chat) {
   return `group${chat.title ? ` "${chat.title}"` : ""} (id ${chat.id})`;
 }
 
-export function buildSystemPrompt({ soul, system, input, people, extraPeople, memory, summary, timezone, now }) {
-  const sections = [soul.trim(), system.trim()].filter((s) => s !== "");
+export function buildSystemPrompt({ soul, system, users = "", input, people, extraPeople, memory, summary, timezone, now }) {
+  const sections = [soul.trim(), system.trim(), users.trim()].filter((s) => s !== "");
 
   const turn = [
     "## Current turn",

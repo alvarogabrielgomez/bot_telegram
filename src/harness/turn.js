@@ -29,7 +29,7 @@ export function createAgent({
   transcript,
   complete,
   mediaTools,
-  prompts: { soul, system },
+  prompts: { soul, system, users = "" },
   timezone,
   maxLlmCalls,
   now = () => new Date(),
@@ -164,7 +164,7 @@ export function createAgent({
     const messages = [
       {
         role: "system",
-        content: buildSystemPrompt({ soul, system, input, people: listed, extraPeople, memory: snapshots, summary, timezone, now: now() }),
+        content: buildSystemPrompt({ soul, system, users, input, people: listed, extraPeople, memory: snapshots, summary, timezone, now: now() }),
       },
       ...renderHistory(recent, { timezone }),
       ...renderTurn([userEntry], { timezone }),
