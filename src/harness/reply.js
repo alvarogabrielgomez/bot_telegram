@@ -4,6 +4,7 @@
 // parse_mode, so a stray "_" or "*" in the reply can never break the send.
 
 import { TELEGRAM_CHUNK_CHARS } from "./limits.js";
+import { stripInvisible } from "./untrusted.js";
 
 const TOKEN_SOURCE = String.raw`\[\[mention:(\d{1,15})\]\]`;
 
@@ -71,8 +72,12 @@ function renderChunk(raw, { people, mentionable }) {
   return { text: trimmed, entities };
 }
 
-export function renderReply(text, { people, mentionable }) {
-  return splitRaw(text, TELEGRAM_CHUNK_CHARS)
+export function renderReply(text, { people, mentionable, log }) {
+  // Bidi and zero-width characters could disguise a link from whoever reads it.
+  // The joiners stay: they build emojis such as family sequences.
+  const stripped = stripInvisible(text, { keepEmojiJoiners: true });
+  if (stripped.removed > 0) log?.info({ field: "reply", removed: stripped.removed }, "stripped invisible characters");
+  return splitRaw(stripped.text, TELEGRAM_CHUNK_CHARS)
     .map((raw) => renderChunk(raw, { people, mentionable }))
     .filter((chunk) => chunk.text !== "");
 }

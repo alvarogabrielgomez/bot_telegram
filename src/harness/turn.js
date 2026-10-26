@@ -142,6 +142,8 @@ export function createAgent({
     const chatId = input.chat.id;
     const isPrivate = input.chat.type === "private";
 
+    if (input.stripped > 0) log.info({ chatId, field: "message", removed: input.stripped }, "stripped invisible characters");
+
     await registerSpeaker(input);
 
     const { entries, summary } = await transcript.load(chatId);
@@ -235,7 +237,7 @@ export function createAgent({
     }
 
     const mentionable = await mentionableIds(text, input, known, io);
-    for (const chunk of renderReply(text, { people: known, mentionable })) {
+    for (const chunk of renderReply(text, { people: known, mentionable, log })) {
       await io.send(chunk);
     }
 

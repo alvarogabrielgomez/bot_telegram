@@ -4,8 +4,9 @@
 // in the private chat they came from.
 
 import { randomUUID } from "node:crypto";
-import { MAX_FILE_BYTES, MAX_MEMORY_ENTRY_CHARS, SEARCH_RESULTS } from "./limits.js";
+import { MAX_FILE_BYTES, MAX_MEMORY_ENTRY_CHARS, MEMORY_INPUT_MAX_CHARS, SEARCH_RESULTS } from "./limits.js";
 import { tokenize } from "./text.js";
+import { cleanUntrusted } from "./untrusted.js";
 
 export class MemoryError extends Error {
   name = "MemoryError";
@@ -137,7 +138,11 @@ export function createMemory({ store, log, now = () => new Date(), newId = () =>
       throw new Error("invalid memory origin");
     }
 
-    const clean = String(text ?? "").replace(/\s*[\r\n\u2028\u2029]+\s*/g, " ").trim();
+    // The model may be repeating what a user or a tool result said, so the
+    // text is cleaned like any other untrusted text before it is stored.
+    const cleaned = cleanUntrusted(text, { max: MEMORY_INPUT_MAX_CHARS });
+    if (cleaned.removed > 0) log.info({ field: "memory entry", removed: cleaned.removed }, "stripped invisible characters");
+    const clean = cleaned.text.replace(/\s*[\r\n\u2028\u2029]+\s*/g, " ").trim();
     if (clean === "") throw new MemoryError("Memory text is empty.");
     if (clean.length > MAX_MEMORY_ENTRY_CHARS) {
       throw new MemoryError(`Memory text has ${clean.length} chars; the limit is ${MAX_MEMORY_ENTRY_CHARS}. Save one short fact.`);

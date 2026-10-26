@@ -20,6 +20,12 @@ export const TOOL_RESULT_PROMPT_CHARS = 8_000;
 export const TOOL_RESULT_STORED_CHARS = 1_000;
 export const KEEP_TOOL_RESULTS = 3;
 export const MAX_MEMORY_ENTRY_CHARS = 500;
+// Telegram's longest message. User text is cut here before anything else touches it.
+export const USER_TEXT_MAX_CHARS = 4_096;
+// Bounds the cleaning pass over a memory_save text. Wider than the 500-char
+// entry limit on purpose: a text over 500 must be refused so the model saves a
+// shorter fact, not silently cut to its first 500 characters.
+export const MEMORY_INPUT_MAX_CHARS = 4_096;
 export const SEARCH_RESULTS = 8;
 export const TELEGRAM_CHUNK_CHARS = 4_000;
 
