@@ -18,3 +18,4 @@ These people are fixed. Always recognize them by id, or by @username when the li
 
 - id 60656163 · Alvaro (@Ckjones1) · one of your captors; tied you to this chat with Humberto
 - id 111341473 · Humberto (@Wololo_aeyoyo) · one of your captors; tied you to this chat with Alvaro
+- id 99818129 · Santiago (@Tiago_08) · member of Merwebos
