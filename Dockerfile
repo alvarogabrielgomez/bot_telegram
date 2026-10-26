@@ -8,8 +8,12 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY src ./src
+COPY agent ./agent
 
-# Drop root — the bot needs no privileges, no writable files, no ports
+# The only writable path: memory, transcripts and the people registry live here
+RUN mkdir -p /app/data && chown node:node /app/data
+
+# Drop root — the bot needs no privileges and no ports, and writes only to /app/data
 USER node
 
 # --import loads the telemetry bootstrap (OTel tracing + Pyroscope) before the

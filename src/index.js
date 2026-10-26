@@ -1,10 +1,41 @@
 import { Telegraf } from "telegraf";
 import { config } from "./config.js";
-import { routeMessage } from "./router.js";
-import { dispatch } from "./tools/index.js";
-import { getHistory, appendToHistory, clearHistory } from "./session.js";
+import { TOOLS, dispatch } from "./tools/index.js";
 import { logger } from "./logger.js";
 import { withSpan } from "./tracing.js";
+import { createStore } from "./harness/store.js";
+import { createMemory } from "./harness/memory.js";
+import { createPeople } from "./harness/people.js";
+import { createTranscript } from "./harness/transcript.js";
+import { createChatCompletion } from "./harness/llm.js";
+import { loadPromptFiles } from "./harness/prompt.js";
+import { createAgent } from "./harness/turn.js";
+import { createTelegramIO } from "./harness/telegramIO.js";
+import { turnInputFromMessage } from "./harness/identity.js";
+
+// The agent's identity and rules live in files the owner edits. If they are
+// missing or too big, stop here: a bot with no prompt would answer as nobody.
+let prompts;
+try {
+  prompts = await loadPromptFiles(config.agent.promptDir, { log: logger });
+} catch (err) {
+  logger.fatal({ err, promptDir: config.agent.promptDir }, "cannot load the agent prompt files");
+  process.exit(1);
+}
+
+const store = createStore({ root: config.agent.dataDir, log: logger });
+const agent = createAgent({
+  store,
+  memory: createMemory({ store, log: logger }),
+  people: createPeople({ store }),
+  transcript: createTranscript({ store, log: logger }),
+  complete: createChatCompletion(config.llm),
+  mediaTools: TOOLS,
+  prompts,
+  timezone: config.agent.timezone,
+  maxLlmCalls: config.agent.maxLlmCalls,
+  log: logger,
+});
 
 // Telegraf aborts handlers after 90s by default, and that timeout rejects
 // outside our try/catch — an unhandled rejection that crashes the process.
@@ -39,9 +70,15 @@ bot.command("start", (ctx) =>
   )
 );
 
-bot.command("reset", (ctx) => {
-  clearHistory(ctx.chat.id);
-  return ctx.reply("Conversation history cleared.");
+// Clears this chat's transcript and summary. Long-term memory stays.
+bot.command("reset", async (ctx) => {
+  try {
+    await agent.reset(ctx.chat.id);
+    await ctx.reply("Conversation history cleared.");
+  } catch (err) {
+    logger.error({ err, chatId: ctx.chat.id }, "reset failed");
+    await replyQuietly(ctx, "Sorry, I couldn't clear the history. 😕", logger);
+  }
 });
 
 // The bot only reacts when a message opens with a trigger word. Returns the
@@ -61,28 +98,25 @@ function matchTrigger(text) {
   return null;
 }
 
-// Record a tool turn as a real tool call + tool result rather than a plain
-// assistant message. If history held plain text like "Sent video: x.mp4",
-// the model would learn to reply to links with that text instead of
-// actually calling the tool.
-function appendToolTurn(chatId, route, resultText) {
-  const id = route.callId ?? `call_${Date.now()}`;
-  appendToHistory(chatId, {
-    role: "assistant",
-    content: "",
-    tool_calls: [
-      { id, type: "function", function: { name: route.name, arguments: JSON.stringify(route.args) } },
-    ],
-  });
-  appendToHistory(chatId, { role: "tool", tool_call_id: id, content: resultText });
+// The error message is a courtesy: if it can't be sent, log and move on.
+async function replyQuietly(ctx, text, log) {
+  try {
+    await ctx.reply(text);
+  } catch (err) {
+    log.warn({ err }, "could not send the error message");
+  }
 }
 
 bot.on("text", async (ctx) => {
   const chatId = ctx.chat.id;
 
-  // Only process messages that open with a trigger word; ignore everything
-  // else so the bot stays quiet in a busy friend group.
-  const userText = matchTrigger(ctx.message.text);
+  // A message is directed at the bot when it opens with a trigger word or
+  // replies to one of the bot's own messages. Everything else is ignored, so
+  // the bot stays quiet in a busy friend group and stores nothing about it.
+  let userText = matchTrigger(ctx.message.text);
+  if (userText === null && ctx.message.reply_to_message?.from?.id === ctx.botInfo.id) {
+    userText = ctx.message.text;
+  }
   if (userText === null) return;
 
   // Root span for the whole update — child spans (LLM call, tool dispatch,
@@ -90,60 +124,16 @@ bot.on("text", async (ctx) => {
   await withSpan(
     "telegram.message",
     { "chat.id": chatId, "chat.type": ctx.chat.type, "user.id": ctx.from.id },
-    async (span) => {
+    async () => {
       const log = logger.child({ chatId, userId: ctx.from.id });
       log.info({ len: userText.length }, "handling message");
-      let placeholder = null;
 
       try {
-        const route = await routeMessage(userText, getHistory(chatId));
-        appendToHistory(chatId, { role: "user", content: userText });
-        span.setAttribute("route.type", route.type);
-        if (route.name) span.setAttribute("route.tool", route.name);
-
-        if (route.type === "text") {
-          appendToHistory(chatId, { role: "assistant", content: route.content });
-          await ctx.reply(route.content);
-          log.info("replied with text");
-          return;
-        }
-
-        // Tool route: downloads can take 10-30+ seconds, so show progress
-        // immediately and edit the message in place when done.
-        placeholder = await ctx.reply("Working on it...");
-        const result = await dispatch(route.name, route.args);
-
-        if (result.type === "media") {
-          await ctx.telegram.deleteMessage(chatId, placeholder.message_id).catch(() => {});
-          await ctx.replyWithMediaGroup(result.media);
-          appendToolTurn(chatId, route, result.fallbackText);
-        } else if (result.type === "video") {
-          await ctx.telegram
-            .editMessageText(chatId, placeholder.message_id, undefined, "Uploading to Telegram...")
-            .catch(() => {});
-          const file = { source: result.buffer, filename: result.filename };
-          if (result.mimeType.startsWith("video/")) {
-            await ctx.replyWithVideo(file, { caption: result.filename });
-          } else {
-            await ctx.replyWithDocument(file, { caption: result.filename });
-          }
-          await ctx.telegram.deleteMessage(chatId, placeholder.message_id).catch(() => {});
-          appendToolTurn(chatId, route, result.fallbackText);
-        } else {
-          await ctx.telegram.editMessageText(chatId, placeholder.message_id, undefined, result.text);
-          appendToolTurn(chatId, route, result.text);
-        }
-        log.info({ tool: route.name, resultType: result.type }, "tool completed");
+        const input = turnInputFromMessage(ctx.message, { botId: ctx.botInfo.id, text: userText });
+        await agent.handleTurn(input, createTelegramIO({ ctx, dispatch, log }));
       } catch (err) {
         log.error({ err }, "handler failed");
-        const friendly = "Sorry, something went wrong with that request. 😕";
-        if (placeholder) {
-          await ctx.telegram
-            .editMessageText(chatId, placeholder.message_id, undefined, friendly)
-            .catch(() => {});
-        } else {
-          await ctx.reply(friendly).catch(() => {});
-        }
+        await replyQuietly(ctx, "Sorry, something went wrong with that request. 😕", log);
       }
     }
   );

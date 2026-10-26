@@ -12,8 +12,12 @@ node_modules/
 
 # Docs / spec — not needed at runtime
 README.md
+docs/
 telegram-ollama-bot-spec.md
 openapi.json
+
+# Agent runtime data — lives in the bot-data volume, never in the image
+data/
 
 # Logs
 *.log
