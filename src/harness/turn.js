@@ -10,14 +10,16 @@ import {
   MEMORY_COMPACT_BYTES,
   MEMORY_COMPACT_RETRY_BYTES,
   MEMORY_PROMPT_CHARS,
+  TOOL_RESULT_BODY_CHARS,
   TRANSCRIPT_COMPACT_BYTES,
 } from "./limits.js";
 import { runLoop } from "./loop.js";
-import { buildSystemPrompt } from "./prompt.js";
+import { buildContextMessage, buildSystemPrompt } from "./prompt.js";
 import { mentionIds, renderReply } from "./reply.js";
 import { FileCapError } from "./store.js";
 import { checkMediaUrl } from "./toolGuards.js";
 import { entriesFromMessages, groupTurns, renderHistory, renderTurn, selectRecent } from "./transcript.js";
+import { cleanUntrusted, dataBlock, newNonce } from "./untrusted.js";
 
 export const URL_RE = /https?:\/\/\S+/i;
 
@@ -167,12 +169,18 @@ export function createAgent({
       replyTo: input.replyTo,
       text: input.text,
     };
+    // One nonce per turn marks every data block of this turn. The model sees it
+    // only inside the prompt, which the people who write the data cannot read.
+    const nonce = newNonce();
+    // Order: instructions, history, data, then the current message. The user's
+    // message goes last so the instructions come after the data (ANTH).
     const messages = [
       {
         role: "system",
-        content: buildSystemPrompt({ soul, system, users, input, people: listed, extraPeople, memory: snapshots, summary, timezone, now: now() }),
+        content: buildSystemPrompt({ soul, system, users, input, people: listed, extraPeople, timezone, now: now() }),
       },
       ...renderHistory(recent, { timezone }),
+      buildContextMessage({ nonce, input, memory: snapshots, summary }),
       ...renderTurn([userEntry], { timezone }),
     ];
 
@@ -182,13 +190,33 @@ export function createAgent({
       telegramInfo: io.telegramInfo,
       turn: { chatId, speakerId: input.speaker.id, origin: { kind: isPrivate ? "private" : "group", chatId } },
     });
+    // A tool result can carry text a user, a memory entry or a web page wrote.
+    // It reaches the model as a marked data block. The messages the harness
+    // writes itself ("Error: ...") go out unwrapped.
+    const asData = (source, result) => {
+      const { text, removed } = cleanUntrusted(result, { max: TOOL_RESULT_BODY_CHARS });
+      if (removed > 0) log.info({ chatId, field: `tool result ${source}`, removed }, "stripped invisible characters");
+      return dataBlock({ nonce, kind: "tool result", source, body: text });
+    };
     const executeTool = async (name, args) => {
-      if (agentTools.has(name)) return agentTools.execute(name, args);
+      if (agentTools.has(name)) {
+        const result = await agentTools.execute(name, args);
+        return result.startsWith("Error: ") ? result : asData(name, result);
+      }
       if (mediaNames.has(name)) {
-        if (!URL_TOOLS.has(name)) return io.deliverTool(name, args);
-        const checked = checkMediaUrl(args.url);
-        if (!checked.ok) return checked.error;
-        return io.deliverTool(name, { ...args, url: checked.url });
+        let toolArgs = args;
+        if (URL_TOOLS.has(name)) {
+          const checked = checkMediaUrl(args.url);
+          if (!checked.ok) return checked.error;
+          toolArgs = { ...args, url: checked.url };
+        }
+        try {
+          return asData(name, await io.deliverTool(name, toolArgs));
+        } catch (err) {
+          log.warn({ err, chatId, tool: name }, "media tool failed");
+          // The message can quote what the backend or a web page said, so it is data too.
+          return asData(name, `Error: ${err.message}`);
+        }
       }
       return `Error: unknown tool ${name}. Available tools: ${toolNames.join(", ")}.`;
     };
@@ -220,7 +248,7 @@ export function createAgent({
             content: "",
             tool_calls: [{ id: callId, type: "function", function: { name: "download_video", arguments: JSON.stringify({ url: checked.url }) } }],
           },
-          { role: "tool", tool_call_id: callId, content: output },
+          { role: "tool", tool_call_id: callId, content: asData("download_video", output) },
         ];
       }
     }

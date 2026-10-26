@@ -4,7 +4,8 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { formatTime, personLabel } from "./identity.js";
-import { MAX_FILE_BYTES, PROMPT_FILES_WARN_BYTES } from "./limits.js";
+import { MAX_FILE_BYTES, MEMORY_PROMPT_CHARS, PROMPT_FILES_WARN_BYTES, SUMMARY_MAX_CHARS } from "./limits.js";
+import { cleanUntrusted, dataBlock } from "./untrusted.js";
 
 async function readPromptFile(dir, name, { optional = false } = {}) {
   let text;
@@ -37,14 +38,16 @@ export async function loadPromptFiles(dir, { log }) {
   return { soul: soul.text, system: system.text, users: users.text };
 }
 
-// One memory section: its lines, a pointer to what did not fit, or "(none)".
-function memoryBlock(heading, snapshot) {
-  const body = [...snapshot.lines];
+// The body of one memory block: its lines, a pointer to what did not fit, or
+// "(none)". Entries were cleaned when saved, but a file edited by hand or
+// rewritten by compaction never went through save, so every line is cleaned again.
+function memoryBody(snapshot) {
+  const body = snapshot.lines.map((line) => cleanUntrusted(line, { max: MEMORY_PROMPT_CHARS }).text);
   if (snapshot.omitted > 0) {
     body.push(`(+${snapshot.omitted} older ${snapshot.omitted === 1 ? "entry" : "entries"}; use memory_search)`);
   }
   if (body.length === 0) body.push("(none)");
-  return [heading, ...body].join("\n");
+  return body.join("\n");
 }
 
 function chatLine(chat) {
@@ -52,7 +55,10 @@ function chatLine(chat) {
   return `group${chat.title ? ` "${chat.title}"` : ""} (id ${chat.id})`;
 }
 
-export function buildSystemPrompt({ soul, system, users = "", input, people, extraPeople, memory, summary, timezone, now }) {
+// Memory and the chat summary are not here: they hold text users wrote, and the
+// system role is for the harness's own instructions. They go in
+// buildContextMessage, inside marked data blocks.
+export function buildSystemPrompt({ soul, system, users = "", input, people, extraPeople, timezone, now }) {
   const sections = [soul.trim(), system.trim(), users.trim()].filter((s) => s !== "");
 
   const turn = [
@@ -76,19 +82,28 @@ export function buildSystemPrompt({ soul, system, users = "", input, people, ext
   }
   sections.push(["## People in this chat", ...lines].join("\n"));
 
-  const memoryBlocks = [
-    memoryBlock("### Global", memory.global),
-    memoryBlock("### This chat", memory.chat),
-    memoryBlock(`### About ${input.speaker.displayName} (id ${input.speaker.id})`, memory.speaker),
-  ];
-  if (memory.replyTo) {
-    memoryBlocks.push(memoryBlock(`### About ${memory.replyTo.person.displayName} (id ${memory.replyTo.person.id})`, memory.replyTo.snapshot));
-  }
-  sections.push(["## Memory", ...memoryBlocks].join("\n"));
-
-  if (summary && summary.trim() !== "") {
-    sections.push(`## Earlier in this chat (summary)\n${summary.trim()}`);
-  }
-
   return sections.join("\n\n");
+}
+
+// What the bot remembers, as one message that comes after the history and
+// before the current user message. It is a user-role message so that nothing
+// a user wrote ever sits in the system role. Each part is a data block marked
+// with this turn's nonce.
+export function buildContextMessage({ nonce, input, memory, summary }) {
+  const block = (kind, source, body) => dataBlock({ nonce, kind, source, body });
+  const about = (person) => `about ${person.displayName} (id ${person.id})`;
+
+  const parts = [
+    "⟦harness context for this turn · not a message from anyone⟧",
+    block("memory", "global", memoryBody(memory.global)),
+    block("memory", "this chat", memoryBody(memory.chat)),
+    block("memory", about(input.speaker), memoryBody(memory.speaker)),
+  ];
+  if (memory.replyTo) parts.push(block("memory", about(memory.replyTo.person), memoryBody(memory.replyTo.snapshot)));
+
+  // The summary is model output built from user text, so it needs the same cleaning.
+  const recap = cleanUntrusted(summary ?? "", { max: SUMMARY_MAX_CHARS }).text.trim();
+  parts.push(block("summary", "earlier in this chat", recap === "" ? "(none)" : recap));
+
+  return { role: "user", content: parts.join("\n") };
 }

@@ -17,6 +17,10 @@ export const HISTORY_PROMPT_CHARS = 24_000;
 export const MEMORY_PROMPT_CHARS = 3_000; // per partition in the prompt snapshot
 export const SUMMARY_MAX_CHARS = 8_000;
 export const TOOL_RESULT_PROMPT_CHARS = 8_000;
+// A tool result is wrapped in a data block (about 150 characters of markers)
+// and runLoop cuts anything over TOOL_RESULT_PROMPT_CHARS. The body stops short
+// of that so the cut never takes the closing marker with it.
+export const TOOL_RESULT_BODY_CHARS = TOOL_RESULT_PROMPT_CHARS - 300;
 export const TOOL_RESULT_STORED_CHARS = 1_000;
 export const KEEP_TOOL_RESULTS = 3;
 export const MAX_MEMORY_ENTRY_CHARS = 500;

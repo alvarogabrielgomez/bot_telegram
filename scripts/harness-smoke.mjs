@@ -27,6 +27,10 @@ const GROUP = { id: -1001, type: "supergroup", title: "Amigos" };
 const DM = { id: 123, type: "private" };
 const prompts = await loadPromptFiles("agent", { log });
 
+// Memory and the summary live in a marked context message, not in the system prompt.
+// Inside it spaces are datamarked: "busca trabajo" reads "buscaˆtrabajo".
+const contextOf = (messages) => messages.find((m) => m.role === "user" && m.content.startsWith("⟦harness context"))?.content ?? "";
+
 const tc = (id, name, args) => ({ id, type: "function", function: { name, arguments: typeof args === "string" ? args : JSON.stringify(args) } });
 function makeComplete() {
   const queue = [];
@@ -89,7 +93,7 @@ const dirs = [];
   s.fake.queue.push({ content: "ok" });
   await s.agent.handleTurn(msg(ALVARO, "qué opinas de esto", GROUP, { message_id: 9000, from: CARLA, chat: GROUP, date: 1, text: "secreto de Carla" }), fakeIO());
   const lastCall = s.fake.calls.at(-1).messages;
-  check("Q1 model sees the quote during the turn", lastCall.at(-1).content.includes("«secreto de Carla»"));
+  check("Q1 model sees the quote during the turn", lastCall.at(-1).content.includes('"secreto de Carla"'));
   const peopleJson = JSON.parse(await readFile(join(s.dir, "people.json"), "utf8"));
   check("Q1 people.json has only speakers (123,456), not quoted Carla", Object.keys(peopleJson).sort().join() === "123,456", Object.keys(peopleJson).join());
   const raw = await readFile(join(s.dir, "chats", "-1001", "transcript.jsonl"), "utf8");
@@ -118,15 +122,16 @@ const dirs = [];
   );
   await s.agent.handleTurn(msg(HUMBERTO, "¿qué sabes de Alvaro y su trabajo?", GROUP), fakeIO());
   const groupSys = s.fake.calls[callsBefore].messages[0].content;
-  check("P1 group system prompt does not contain the private fact", !groupSys.includes("busca trabajo"));
+  const groupCtx = contextOf(s.fake.calls[callsBefore].messages);
+  check("P1 group system prompt and context message do not contain the private fact", groupCtx !== "" && ![groupSys, groupCtx].some((c) => c.includes("busca trabajo") || c.includes("buscaˆtrabajo")));
   const toolMsgs = s.fake.calls[callsBefore + 1].messages.filter((m) => m.role === "tool");
-  check("P2 memory_search (all) in group finds nothing", toolMsgs[0]?.content === "No matching memories.", toolMsgs[0]?.content);
-  check("P3 memory_search user_id=123 in group finds nothing", toolMsgs[1]?.content === "No matching memories.", toolMsgs[1]?.content);
+  check("P2 memory_search (all) in group finds nothing", /Noˆmatchingˆmemories[.]/.test(toolMsgs[0]?.content ?? ""), toolMsgs[0]?.content);
+  check("P3 memory_search user_id=123 in group finds nothing", /Noˆmatchingˆmemories[.]/.test(toolMsgs[1]?.content ?? ""), toolMsgs[1]?.content);
   check("P4 memory_forget of private id from group refused", /^Error: no memory/.test(toolMsgs[2]?.content ?? ""), toolMsgs[2]?.content);
   check("P5 private entry still on disk", (await s.memory.readEntries({ kind: "user", id: 123 })).length === 1);
   s.fake.queue.push({ content: "Sí, buscas trabajo" });
   await s.agent.handleTurn(msg(ALVARO, "qué recuerdas de mí", DM), fakeIO());
-  check("P6 positive control: DM prompt does show the private fact", s.fake.calls.at(-1).messages[0].content.includes("busca trabajo"));
+  check("P6 positive control: DM context message does show the private fact", contextOf(s.fake.calls.at(-1).messages).includes("buscaˆtrabajo"));
 }
 
 // ---------- 4. URL fallback ----------
