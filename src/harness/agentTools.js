@@ -46,7 +46,7 @@ export const AGENT_TOOLS = [
     function: {
       name: "memory_forget",
       description:
-        'Delete the memory entry with this id. The id is the text in square brackets in a memory_search result or in the Memory section of the prompt. Example: {"id":"ab12cd34"}.',
+        'Delete the memory entry with this id. The id is the text in square brackets in a memory_search result or in a memory block of the context message. Example: {"id":"ab12cd34"}.',
       parameters: {
         type: "object",
         properties: {

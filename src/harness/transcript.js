@@ -118,7 +118,12 @@ const serialize = (entries) => (entries.length === 0 ? "" : `${entries.map((e) =
 // was not addressed to the bot is never kept ("directed messages only").
 function prepareForStorage(entry) {
   if (entry.type === "tool") {
-    return { ...entry, text: truncate(entry.text ?? "", TOOL_RESULT_STORED_CHARS, "Stored history keeps only the start.") };
+    const text = entry.text ?? "";
+    const stored = truncate(text, TOOL_RESULT_STORED_CHARS, "Stored history keeps only the start.");
+    // A cut data block would lose its closing marker; put it back so replayed
+    // history never holds an unterminated ⟦data …⟧ block.
+    const closing = text.match(/\n(⟦end [0-9a-f]+⟧)$/)?.[1];
+    return { ...entry, text: closing && stored !== text ? `${stored}\n${closing}` : stored };
   }
   if (entry.type === "user" && entry.replyTo && !entry.replyTo.isBot) {
     return { ...entry, replyTo: { ...entry.replyTo, text: null } };
