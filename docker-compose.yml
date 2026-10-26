@@ -20,6 +20,9 @@ services:
     image: ghcr.io/wololo/telegram_bot:latest
     restart: unless-stopped
     env_file: .env
+    volumes:
+      # Agent memory, transcripts and the people registry (DATA_DIR in the image).
+      - bot-data:/app/data
     environment:
       # Point the app's telemetry at the stack. These override anything in .env.
       OTEL_SERVICE_NAME: telegram-bot
@@ -98,6 +101,7 @@ services:
       - pyroscope
 
 volumes:
+  bot-data:
   loki-data:
   tempo-data:
   grafana-data:

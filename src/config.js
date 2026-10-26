@@ -1,5 +1,6 @@
 import "dotenv/config";
 import { logger } from "./logger.js";
+import { DEFAULT_MAX_LLM_CALLS } from "./harness/limits.js";
 
 function required(name) {
   const value = process.env[name];
@@ -12,6 +13,26 @@ function required(name) {
 
 function optional(name, fallback = "") {
   return process.env[name] || fallback;
+}
+
+// The agent loop is capped at DEFAULT_MAX_LLM_CALLS model calls per message, so
+// a bad value falls back to the cap instead of raising it.
+function parseMaxLlmCalls(raw) {
+  const value = Number(raw);
+  if (Number.isInteger(value) && value >= 1 && value <= DEFAULT_MAX_LLM_CALLS) return value;
+  logger.warn({ value: raw }, `AGENT_MAX_LLM_CALLS must be an integer from 1 to ${DEFAULT_MAX_LLM_CALLS}; using ${DEFAULT_MAX_LLM_CALLS}`);
+  return DEFAULT_MAX_LLM_CALLS;
+}
+
+// A bad zone would make every message fail when the prompt formats the time.
+function parseTimezone(raw) {
+  try {
+    new Intl.DateTimeFormat("sv-SE", { timeZone: raw });
+    return raw;
+  } catch (err) {
+    logger.warn({ err, value: raw }, "AGENT_TIMEZONE is not a valid IANA time zone; using UTC");
+    return "UTC";
+  }
 }
 
 export const config = {
@@ -31,7 +52,7 @@ export const config = {
     // these words (case-insensitive). Private chats always get a reply.
     triggerPrefixes: optional(
       "TELEGRAM_TRIGGER_PREFIXES",
-      "bot,hey bot,ok bot,yo bot,botto,bottino,oi,ao,robocla,robot"
+      "clanker,bot,hey bot,ok bot,yo bot,botto,bottino,oi,ao,robocla,robot"
     )
       .split(",")
       .map((p) => p.trim().toLowerCase())
@@ -43,6 +64,13 @@ export const config = {
     baseUrl: optional("LLM_BASE_URL", "https://integrate.api.nvidia.com/v1").replace(/\/$/, ""),
     model: optional("LLM_MODEL", "deepseek-ai/deepseek-v4-flash"),
     apiKey: optional("LLM_API_KEY"),
+  },
+  // Agent harness: persistent memory, prompt files and loop limits.
+  agent: {
+    dataDir: optional("DATA_DIR", "./data"),
+    promptDir: optional("AGENT_PROMPT_DIR", "./agent"),
+    maxLlmCalls: parseMaxLlmCalls(optional("AGENT_MAX_LLM_CALLS", String(DEFAULT_MAX_LLM_CALLS))),
+    timezone: parseTimezone(optional("AGENT_TIMEZONE", "UTC")),
   },
   ytdlp: {
     baseUrl: optional("YTDLP_BASE_URL"),
