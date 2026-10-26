@@ -233,6 +233,10 @@ export function createAgent({
       return chunks.length;
     };
     let sentMessages = 0;
+    // Texts already posted with send_message, normalized, so the final reply
+    // never repeats one of them (small models often send a line and then say it again).
+    const sameText = (t) => String(t ?? "").replace(/\s+/g, " ").trim().toLowerCase();
+    const sentTexts = new Set();
 
     const executeTool = async (name, args) => {
       if (name === "send_message") {
@@ -241,6 +245,7 @@ export function createAgent({
         }
         if ((await deliverText(String(args.text ?? ""))) === 0) return "Error: the message was empty; nothing was sent.";
         sentMessages += 1;
+        sentTexts.add(sameText(args.text));
         return `Sent message ${sentMessages}.`;
       }
       if (agentTools.has(name)) {
@@ -300,7 +305,11 @@ export function createAgent({
     // Messages already posted with send_message count as an answer too.
     if (text.trim() === "" && !ranTools && sentMessages === 0) throw new Error("empty model reply");
 
-    await deliverText(text);
+    if (sentTexts.has(sameText(text))) {
+      log.info({ chatId }, "final reply repeats a sent message; not sending it twice");
+    } else {
+      await deliverText(text);
+    }
 
     await transcript.appendTurn(chatId, [userEntry, ...entriesFromMessages(added, now())]);
     log.info({ chatId, llmCalls: result.calls, tools: result.toolCalls.map((c) => c.name) }, "turn done");
