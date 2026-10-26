@@ -71,6 +71,12 @@ bot.command("start", (ctx) =>
 );
 
 // Clears this chat's transcript and summary. Long-term memory stays.
+// Shows the sender's Telegram id (and the chat's) so the owner can pin people in
+// agent/users.md without digging through logs.
+bot.command("id", (ctx) =>
+  ctx.reply(`Tu id: ${ctx.from.id}${ctx.from.username ? ` (@${ctx.from.username})` : ""}\nId de este chat: ${ctx.chat.id}`)
+);
+
 bot.command("reset", async (ctx) => {
   try {
     await agent.reset(ctx.chat.id);
