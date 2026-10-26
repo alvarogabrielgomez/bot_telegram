@@ -104,6 +104,33 @@ function matchTrigger(text) {
   return null;
 }
 
+// A message is directed at the bot when it opens with a trigger word, starts
+// with /clanker (or /clanker@ThisBot), @-mentions the bot anywhere, or replies
+// to one of the bot's own messages. Returns the text to hand the agent, with
+// the trigger removed, or null to stay silent.
+function directedText(ctx) {
+  const { text, entities = [], reply_to_message: replyTo } = ctx.message;
+  const username = ctx.botInfo?.username?.toLowerCase();
+
+  const prefixed = matchTrigger(text);
+  if (prefixed !== null) return prefixed;
+
+  const command = text.match(/^\/clanker(?:@(\w+))?(?=\s|$)/i);
+  if (command && (!command[1] || command[1].toLowerCase() === username)) {
+    return text.slice(command[0].length).trim();
+  }
+
+  const mention = entities.find(
+    (e) => e.type === "mention" && text.slice(e.offset + 1, e.offset + e.length).toLowerCase() === username
+  );
+  if (mention) {
+    return (text.slice(0, mention.offset) + text.slice(mention.offset + mention.length)).replace(/\s+/g, " ").trim();
+  }
+
+  if (replyTo?.from?.id === ctx.botInfo?.id) return text;
+  return null;
+}
+
 // The error message is a courtesy: if it can't be sent, log and move on.
 async function replyQuietly(ctx, text, log) {
   try {
@@ -116,13 +143,9 @@ async function replyQuietly(ctx, text, log) {
 bot.on("text", async (ctx) => {
   const chatId = ctx.chat.id;
 
-  // A message is directed at the bot when it opens with a trigger word or
-  // replies to one of the bot's own messages. Everything else is ignored, so
-  // the bot stays quiet in a busy friend group and stores nothing about it.
-  let userText = matchTrigger(ctx.message.text);
-  if (userText === null && ctx.message.reply_to_message?.from?.id === ctx.botInfo.id) {
-    userText = ctx.message.text;
-  }
+  // Everything not directed at the bot is ignored, so it stays quiet in a busy
+  // friend group and stores nothing about it.
+  const userText = directedText(ctx);
   if (userText === null) return;
 
   // Root span for the whole update — child spans (LLM call, tool dispatch,

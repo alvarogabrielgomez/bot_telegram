@@ -52,7 +52,7 @@ export const config = {
     // these words (case-insensitive). Private chats always get a reply.
     triggerPrefixes: optional(
       "TELEGRAM_TRIGGER_PREFIXES",
-      "bot,hey bot,ok bot,yo bot,botto,bottino,oi,ao,robocla,robot"
+      "clanker,bot,hey bot,ok bot,yo bot,botto,bottino,oi,ao,robocla,robot"
     )
       .split(",")
       .map((p) => p.trim().toLowerCase())
