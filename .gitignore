@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Runtime data (agent memory, transcripts)
+data/
+
 # Environment / secrets
 .env
 .env.local

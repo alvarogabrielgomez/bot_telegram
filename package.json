@@ -6,7 +6,8 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node --import ./src/telemetry.js src/index.js",
-    "spotify-auth": "node scripts/spotify-auth.js"
+    "spotify-auth": "node scripts/spotify-auth.js",
+    "test": "node --test"
   },
   "engines": {
     "node": ">=20"
