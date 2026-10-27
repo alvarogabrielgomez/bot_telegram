@@ -77,14 +77,32 @@ function renderChunk(raw, { people, mentionable }) {
 // ignores length rules in the prompt.
 const MEMORY_ID_RE = /\s*\[[0-9a-f]{8}\]/g;
 const SENTENCE_ENDS = [". ", "! ", "? ", "… ", ".\n", "!\n", "?\n", "\n"];
+const LIST_ITEM_RE = /^(?:[-•*]|\d+[.)])\s/;
+
+// Prompt plumbing a small model sometimes echoes back to the chat: harness
+// labels, "(id 123)" asides, empty-section markers, section names.
+const INTERNALS = [
+  [/⟦[^⟧]*⟧/g, ""],
+  [/\s*\(id -?\d+\)/g, ""],
+  [/\s*\(none\)/gi, ""],
+  [/\b(?:memoria|memory) (?:chat|global)\b/gi, "memoria"],
+];
+
+// One paragraph: line breaks become spaces, except in front of list items.
+const oneParagraph = (text) =>
+  text
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .reduce((out, line, i) => (i === 0 ? line : `${out}${LIST_ITEM_RE.test(line) ? "\n" : " "}${line}`), "");
 
 export function polishReply(text, { maxChars }) {
-  const out = String(text ?? "")
+  let out = String(text ?? "")
     .replace(/\*\*|`/g, "")
     .replace(/^#{1,6}\s+/gm, "")
-    .replace(MEMORY_ID_RE, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .replace(MEMORY_ID_RE, "");
+  for (const [pattern, replacement] of INTERNALS) out = out.replace(pattern, replacement);
+  out = oneParagraph(out).trim();
   if (out.length <= maxChars) return out;
   const head = out.slice(0, maxChars);
   // Cut after the last whole sentence that fits; failing that, at the last space.

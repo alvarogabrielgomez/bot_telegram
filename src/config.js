@@ -71,7 +71,7 @@ export const config = {
     promptDir: optional("AGENT_PROMPT_DIR", "./agent"),
     maxLlmCalls: parseMaxLlmCalls(optional("AGENT_MAX_LLM_CALLS", String(DEFAULT_MAX_LLM_CALLS))),
     // Hard cap on each chat message the bot writes; longer text is cut at a sentence end.
-    maxReplyChars: Math.max(100, Number.parseInt(optional("AGENT_MAX_REPLY_CHARS", "500"), 10) || 500),
+    maxReplyChars: Math.max(100, Number.parseInt(optional("AGENT_MAX_REPLY_CHARS", "280"), 10) || 280),
     timezone: parseTimezone(optional("AGENT_TIMEZONE", "UTC")),
   },
   ytdlp: {
