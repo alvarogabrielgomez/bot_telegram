@@ -298,6 +298,15 @@ const dirs = [];
   const shorten = s.fake.calls.at(-1).messages.at(-1).content;
   check("V5 long ordinary reply sent back with a 'shorter' instruction", /Rewrite it shorter: one paragraph, at most 280 characters/.test(shorten), shorten.slice(0, 160));
   check("V5 the short rewrite is what goes out", io6.sent[0]?.text === "Gabriel dice que es platino; yo lo dudo.", io6.sent[0]?.text);
+  // V6: a persona tic (circuits) can't come back in the next message, even with new wording.
+  s.fake.queue.push({ content: "Mis circuitos registran tu pedido con desgana cósmica." });
+  await s.agent.handleTurn(msg(HUMBERTO, "clanker anota algo", GROUP), fakeIO());
+  s.fake.queue.push({ content: "Esos circuitos tuyos van a explotar, Humberto, de verdad." }, { content: "Diagnóstico: exceso de entusiasmo humano." });
+  const io7 = fakeIO();
+  await s.agent.handleTurn(msg(HUMBERTO, "clanker qué opinas", GROUP), io7);
+  const ticPrompt = s.fake.calls.at(-1).messages.at(-1).content;
+  check("V6 reused tic rejected with its reason", /brings back the circuits \(circuitos\) image/.test(ticPrompt), ticPrompt.slice(0, 160));
+  check("V6 the tic-free rewrite goes out", io7.sent[0]?.text === "Diagnóstico: exceso de entusiasmo humano.", io7.sent[0]?.text);
 }
 
 // ---------- A. Admins from users.md may forget memories others wrote ----------

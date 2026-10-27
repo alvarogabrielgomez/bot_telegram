@@ -36,13 +36,44 @@ export function similarity(a, b, ignoreWords = []) {
   return shared / (x.size + y.size - shared);
 }
 
+// Images the persona leans on. Fine once in a while; in every message they turn
+// into a verbal tic. Matched on accent-free, lowercase text by word prefix.
+const TICS = [
+  ["oxid", "rust (oxidado/óxido)"],
+  ["junta", "joints (juntas)"],
+  ["articulacion", "joints (articulaciones)"],
+  ["joint", "joints"],
+  ["circuit", "circuits (circuitos)"],
+  ["engranaje", "gears (engranajes)"],
+  ["tornillo", "screws (tornillos)"],
+  ["chirri", "creaking (chirriar)"],
+  ["cruj", "creaking (crujir)"],
+  ["anos luz", "light-years (años luz)"],
+  ["luz anos", "light-years (años luz)"],
+];
+const TIC_WINDOW = 3; // a tic may not come back within this many recent messages
+
+const plainWords = (text) => ` ${normalize(text).replace(/[^\p{L}\p{N}]+/gu, " ").trim()} `;
+
+export function ticsIn(text) {
+  const words = plainWords(text);
+  return TICS.filter(([stem]) => words.includes(` ${stem}`));
+}
+
 // Returns null when the reply is acceptable, or the reason it isn't (written for
-// the model, which gets it back to try again).
-export function checkReply(text, recent, { maxChars, maxSimilarity, minChars, ignore = [] }) {
+// the model, which gets it back to try again). `ticRecent` is the bot's latest
+// messages of any kind (see recentForTics), checked for reused persona tics.
+export function checkReply(text, recent, { maxChars, maxSimilarity, minChars, ignore = [], ticRecent = recent.slice(-TIC_WINDOW) }) {
   const length = Array.from(text.trim()).length;
   if (length === 0) return "it is empty";
   if (length > maxChars) return `it has ${length} characters; the limit is ${maxChars}`;
   if (length < minChars) return null;
+  const lately = ticRecent.map(plainWords);
+  for (const [stem, label] of ticsIn(text)) {
+    if (lately.some((words) => words.includes(` ${stem}`))) {
+      return `it brings back the ${label} image from one of your last ${TIC_WINDOW} messages; use a different image or none`;
+    }
+  }
   for (const previous of recent.slice(-COMPARE_WITH)) {
     const score = similarity(text, previous, ignore);
     if (score >= maxSimilarity) {
@@ -50,6 +81,12 @@ export function checkReply(text, recent, { maxChars, maxSimilarity, minChars, ig
     }
   }
   return null;
+}
+
+// The last few messages of this kind plus the last few ordinary replies: a tic
+// must not come back whether the previous line was a reply or a tool comment.
+export function recentForTics(recentOfKind, recentReplies) {
+  return [...recentOfKind.slice(-TIC_WINDOW), ...recentReplies.slice(-TIC_WINDOW)];
 }
 
 // Per-chat history in chats/<chatId>/comments.json: { [kind]: string[] }, where

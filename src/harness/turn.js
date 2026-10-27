@@ -4,7 +4,7 @@
 // chat never interleave; chats do not wait for each other.
 
 import { AGENT_TOOLS, createAgentToolExecutor } from "./agentTools.js";
-import { REPLY_RULES, TOOL_COMMENT_RULES, checkReply, createCommentLog } from "./comments.js";
+import { REPLY_RULES, TOOL_COMMENT_RULES, checkReply, createCommentLog, recentForTics } from "./comments.js";
 import { compactMemory, compactTranscript } from "./compaction.js";
 import {
   HISTORY_PROMPT_CHARS,
@@ -265,6 +265,7 @@ export function createAgent({
       const rules = deliveredBy ? TOOL_COMMENT_RULES : { ...REPLY_RULES, maxChars: maxReplyChars };
       const ignore = [input.speaker.firstName, input.speaker.lastName, input.speaker.username, "clanker"].filter(Boolean);
       const recent = await comments.recent(chatId, kind);
+      const ticRecent = recentForTics(recent, kind === "reply" ? [] : await comments.recent(chatId, "reply"));
       // Mention tokens are long ids; count them as one short name.
       const forCheck = (t) => t.replace(/\[\[mention:\d+\]\]/g, "@");
       const instructionsFor = (reason) => {
@@ -278,7 +279,7 @@ export function createAgent({
       };
       let current = draft;
       for (let attempt = 0; ; attempt++) {
-        const reason = checkReply(forCheck(current), recent, { ...rules, ignore });
+        const reason = checkReply(forCheck(current), recent, { ...rules, ignore, ticRecent });
         if (!reason) {
           await comments.add(chatId, kind, forCheck(current));
           return current;
