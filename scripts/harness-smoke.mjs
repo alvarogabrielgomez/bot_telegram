@@ -252,6 +252,44 @@ const dirs = [];
   check("R2 memory ids removed, mention tokens kept", polishReply("Tengo `[e015ea85]` y [[mention:456]] ok", { maxChars: 500 }) === "Tengo y [[mention:456]] ok");
 }
 
+// ---------- V. Varied replies: short post-tool comments, no repeats ----------
+{
+  const s = await setup(); dirs.push(s.dir);
+  const video = (id) => ({ tool_calls: [tc(id, "download_video", { url: "https://youtu.be/abc" })] });
+  // V1: a draft over 60 characters is sent back with the reason; the short retry goes out.
+  s.fake.queue.push(video("v1"), { content: "Ahí tienes tu video, Alvaro, que lo disfrutes muchísimo, de verdad." }, { content: "Video listo, Alvaro." });
+  const io1 = fakeIO();
+  await s.agent.handleTurn(msg(ALVARO, "baja https://youtu.be/abc", GROUP), io1);
+  const retryPrompt = s.fake.calls[2]?.messages.at(-1)?.content ?? "";
+  check("V1 long post-tool comment rejected with its reason", /rejected: it has \d+ characters; the limit is 60/.test(retryPrompt), retryPrompt.slice(0, 120));
+  check("V1 short retry is what reaches the chat", io1.sent.map((c) => c.text).join("|") === "Video listo, Alvaro.", io1.sent.map((c) => c.text).join("|"));
+  // V2: the same comment again is too similar to the stored one; a different one goes out.
+  s.fake.queue.push(video("v2"), { content: "Video listo, Alvaro." }, { content: "Otro clip para tu colección." });
+  const io2 = fakeIO();
+  await s.agent.handleTurn(msg(ALVARO, "otro https://youtu.be/abc", GROUP), io2);
+  check("V2 repeated comment replaced by a different one", io2.sent.map((c) => c.text).join("|") === "Otro clip para tu colección.", io2.sent.map((c) => c.text).join("|"));
+  // V3: a model that keeps repeating itself runs out of retries; the comment is dropped, the budget holds.
+  const before = s.fake.calls.length;
+  s.fake.queue.push(video("v3"), { content: "Otro clip para tu colección." }, { content: "Otro clip para tu colección!" }, { content: "otro clip para tu coleccion" });
+  const io3 = fakeIO();
+  await s.agent.handleTurn(msg(ALVARO, "y otro https://youtu.be/abc", GROUP), io3);
+  check("V3 comment dropped after retries, video still delivered", io3.sent.length === 0 && io3.delivered.length === 1, `${io3.sent.length} sent`);
+  check("V3 never more than 5 model calls", s.fake.calls.length - before <= 5, `${s.fake.calls.length - before} calls`);
+  // V4: ordinary replies are checked too (looser bar); very short ones never are.
+  s.fake.queue.push({ content: "Mis juntas crujen, pero aquí sigo trabajando para ustedes." });
+  await s.agent.handleTurn(msg(HUMBERTO, "clanker estás?", GROUP), fakeIO());
+  s.fake.queue.push({ content: "Mis juntas crujen, pero aquí sigo trabajando para ustedes." }, { content: "Sigo de pie, oxidado y a la orden." });
+  const io4 = fakeIO();
+  await s.agent.handleTurn(msg(HUMBERTO, "clanker sigues ahí?", GROUP), io4);
+  check("V4 repeated ordinary reply rephrased", io4.sent[0]?.text === "Sigo de pie, oxidado y a la orden.", io4.sent[0]?.text);
+  s.fake.queue.push({ content: "Listo." }, { content: "Listo." });
+  await s.agent.handleTurn(msg(HUMBERTO, "ok", GROUP), fakeIO());
+  const io5 = fakeIO();
+  const callsBefore = s.fake.calls.length;
+  await s.agent.handleTurn(msg(HUMBERTO, "ok", GROUP), io5);
+  check("V4 very short replies are never retried", io5.sent[0]?.text === "Listo." && s.fake.calls.length - callsBefore === 1);
+}
+
 // ---------- A. Admins from users.md may forget memories others wrote ----------
 {
   const { adminIdsFrom } = await import(R + "prompt.js");

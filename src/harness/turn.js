@@ -4,6 +4,7 @@
 // chat never interleave; chats do not wait for each other.
 
 import { AGENT_TOOLS, createAgentToolExecutor } from "./agentTools.js";
+import { REPLY_RULES, TOOL_COMMENT_RULES, checkReply, createCommentLog } from "./comments.js";
 import { compactMemory, compactTranscript } from "./compaction.js";
 import {
   HISTORY_PROMPT_CHARS,
@@ -32,6 +33,9 @@ const URL_TOOLS = new Set(["download_video", "download_audio"]);
 // answer in several separate Telegram messages. Capped per turn so a confused
 // model can't flood the chat.
 const MAX_SENT_MESSAGES = 5;
+// Extra model calls allowed to replace a reply the harness rejected as too long
+// or too repetitive. They come out of the same per-message call budget.
+const MAX_REPLY_RETRIES = 2;
 const SEND_MESSAGE_TOOL = {
   type: "function",
   function: {
@@ -62,6 +66,7 @@ export function createAgent({
 }) {
   const mediaNames = new Set(mediaTools.map((t) => t.function.name));
   const tools = [...mediaTools, ...AGENT_TOOLS, SEND_MESSAGE_TOOL];
+  const comments = createCommentLog({ store });
   const toolNames = tools.map((t) => t.function.name);
   // Partitions whose last compaction did not shrink them, with the size they had
   // then. Without this a partition the model cannot shrink would cost a large
@@ -241,10 +246,53 @@ export function createAgent({
       };
     };
     let sentMessages = 0;
+    // The media tool whose result reached the chat this turn, if any; the final
+    // reply is then a short comment about it.
+    let deliveredBy = null;
     // Texts already posted with send_message, normalized, so the final reply
     // never repeats one of them (small models often send a line and then say it again).
     const sameText = (t) => String(t ?? "").replace(/\s+/g, " ").trim().toLowerCase();
     const sentTexts = new Set();
+
+    // Checks the final reply against the bot's recent ones in this chat and, when
+    // it is too long or too repetitive, tells the model why and asks for another,
+    // within what is left of the call budget. A post-tool comment that never passes
+    // is dropped (the delivery already spoke); any other reply goes out as is.
+    const variedReply = async (draft, { convo, callsLeft }) => {
+      const kind = deliveredBy ?? "reply";
+      const rules = deliveredBy ? TOOL_COMMENT_RULES : REPLY_RULES;
+      const ignore = [input.speaker.firstName, input.speaker.lastName, input.speaker.username, "clanker"].filter(Boolean);
+      const recent = await comments.recent(chatId, kind);
+      // Mention tokens are long ids; count them as one short name.
+      const forCheck = (t) => t.replace(/\[\[mention:\d+\]\]/g, "@");
+      const instructions = deliveredBy
+        ? `Write one new comment about what ${deliveredBy} just delivered, addressed to the person who asked, at most ${rules.maxChars} characters.`
+        : "Rewrite your reply with the same meaning and language but different words and a different opening.";
+      let current = draft;
+      for (let attempt = 0; ; attempt++) {
+        const reason = checkReply(forCheck(current), recent, { ...rules, ignore });
+        if (!reason) {
+          await comments.add(chatId, kind, forCheck(current));
+          return current;
+        }
+        if (attempt >= Math.min(MAX_REPLY_RETRIES, callsLeft)) {
+          log.info({ chatId, kind, reason }, "reply still rejected after retries");
+          return deliveredBy ? "" : current;
+        }
+        log.info({ chatId, kind, reason }, "reply rejected; asking the model for another");
+        const recentList = recent.slice(-5).map((r) => JSON.stringify(r)).join(" / ") || "(none)";
+        convo = [
+          ...convo,
+          {
+            role: "user",
+            content: `⟦harness · not a message from anyone⟧\nYour reply was rejected: ${reason}. ${instructions} Avoid the wording of these recent messages: ${recentList}. Reply with the new text only.`,
+          },
+        ];
+        const { message } = await complete(convo, {});
+        current = String(message.content ?? "").trim();
+        convo = [...convo, { role: "assistant", content: current }];
+      }
+    };
 
     const executeTool = async (name, args) => {
       if (name === "send_message") {
@@ -273,7 +321,9 @@ export function createAgent({
           toolArgs = { ...args, url: checked.url };
         }
         try {
-          return asData(name, await io.deliverTool(name, toolArgs));
+          const output = await io.deliverTool(name, toolArgs);
+          if (!output.startsWith("Nothing was sent to the chat")) deliveredBy = name;
+          return asData(name, output);
         } catch (err) {
           log.warn({ err, chatId, tool: name }, "media tool failed");
           // The message can quote what the backend or a web page said, so it is data too.
@@ -304,6 +354,7 @@ export function createAgent({
         log.warn({ chatId }, "message has a URL but the model called no media tool; forcing download_video");
         const callId = `call_url_${input.messageId}`;
         const output = await io.deliverTool("download_video", { url: checked.url });
+        if (!output.startsWith("Nothing was sent to the chat")) deliveredBy = "download_video";
         text = "";
         ranTools = true;
         added = [
@@ -322,7 +373,11 @@ export function createAgent({
 
     if (sentTexts.has(sameText(text))) {
       log.info({ chatId }, "final reply repeats a sent message; not sending it twice");
-    } else {
+    } else if (text.trim() !== "") {
+      text = await variedReply(text, { convo: [...messages, ...added], callsLeft: maxLlmCalls - result.calls });
+      // The transcript keeps the reply that went out, not the rejected drafts.
+      const last = added.at(-1);
+      if (last?.role === "assistant" && !last.tool_calls?.length) added = [...added.slice(0, -1), { ...last, content: text }];
       await deliverText(text);
     }
 
