@@ -34,6 +34,7 @@ const agent = createAgent({
   prompts,
   timezone: config.agent.timezone,
   maxLlmCalls: config.agent.maxLlmCalls,
+  maxReplyChars: config.agent.maxReplyChars,
   log: logger,
 });
 

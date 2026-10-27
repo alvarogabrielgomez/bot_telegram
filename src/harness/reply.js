@@ -72,6 +72,28 @@ function renderChunk(raw, { people, mentionable }) {
   return { text: trimmed, entities };
 }
 
+// Chat replies stay short and plain whatever the model writes: Telegram shows
+// Markdown literally (no parse_mode), memory ids are internal, and a small model
+// ignores length rules in the prompt.
+const MEMORY_ID_RE = /\s*\[[0-9a-f]{8}\]/g;
+const SENTENCE_ENDS = [". ", "! ", "? ", "… ", ".\n", "!\n", "?\n", "\n"];
+
+export function polishReply(text, { maxChars }) {
+  const out = String(text ?? "")
+    .replace(/\*\*|`/g, "")
+    .replace(/^#{1,6}\s+/gm, "")
+    .replace(MEMORY_ID_RE, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  if (out.length <= maxChars) return out;
+  const head = out.slice(0, maxChars);
+  // Cut after the last whole sentence that fits; failing that, at the last space.
+  const end = Math.max(...SENTENCE_ENDS.map((mark) => head.lastIndexOf(mark)));
+  if (end > maxChars * 0.4) return head.slice(0, end + 1).trim();
+  const space = head.lastIndexOf(" ");
+  return `${head.slice(0, space > 0 ? space : maxChars).trimEnd()}…`;
+}
+
 export function renderReply(text, { people, mentionable, log }) {
   // Bidi and zero-width characters could disguise a link from whoever reads it.
   // The joiners stay: they build emojis such as family sequences.

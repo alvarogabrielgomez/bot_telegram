@@ -230,6 +230,46 @@ const dirs = [];
   const io2 = fakeIO();
   await s.agent.handleTurn(msg(ALVARO, "estás?", GROUP), io2);
   check("M2 final reply repeating a sent message goes out once", io2.sent.length === 1, io2.sent.map((c) => c.text).join(" | "));
+
+  // A group member who never wrote to the bot: not in people.json, but Telegram knows them.
+  s.fake.queue.push({ tool_calls: [tc("s1", "send_message", { text: "[[mention:99818129]], Alvaro te recuerda la partida" }), tc("s2", "send_message", { text: "[[mention:31337]] hola" })] }, { content: "" });
+  const io3 = fakeIO();
+  io3.memberPerson = async (id) => (id === 99818129 ? { id, firstName: "Santiago", lastName: null, username: "Tiago_08", displayName: "Santiago" } : null);
+  await s.agent.handleTurn(msg(ALVARO, "recuérdale a Santiago", GROUP), io3);
+  const santi = io3.sent[0];
+  check("M3 member outside people.json gets a real mention", santi?.text.startsWith("Santiago,") && santi.entities[0]?.user?.id === 99818129, JSON.stringify(santi));
+  const notes = s.fake.calls.at(-1).messages.filter((m) => m.role === "tool").map((m) => m.content).slice(-2);
+  check("M3 unknown id reported back to the model as dropped", /mention of id 31337 was dropped/.test(notes[1] ?? ""), notes[1]);
+}
+
+// ---------- R. Reply polish: hard length cap, no Markdown, no memory ids ----------
+{
+  const { polishReply } = await import(R + "reply.js");
+  const long = "**Alvaro** es caótico. ".repeat(40) + "Fin.";
+  const out = polishReply(long, { maxChars: 500 });
+  check("R1 long reply cut under the cap at a sentence end", out.length <= 500 && out.endsWith("."), `${out.length} chars`);
+  check("R1 Markdown bold removed", !out.includes("**"));
+  check("R2 memory ids removed, mention tokens kept", polishReply("Tengo `[e015ea85]` y [[mention:456]] ok", { maxChars: 500 }) === "Tengo y [[mention:456]] ok");
+}
+
+// ---------- A. Admins from users.md may forget memories others wrote ----------
+{
+  const { adminIdsFrom } = await import(R + "prompt.js");
+  check("A1 admin ids parsed from the shipped users.md", JSON.stringify(adminIdsFrom(prompts.users)) === "[60656163,111341473]", JSON.stringify(adminIdsFrom(prompts.users)));
+  const dir = await mkdtemp(join(tmpdir(), "final-smoke-")); dirs.push(dir);
+  const store = createStore({ root: dir, log });
+  const memory = createMemory({ store, log });
+  const fake = makeComplete();
+  const agent = createAgent({ store, memory, people: createPeople({ store }), transcript: createTranscript({ store, log }), complete: fake.complete, mediaTools: [DOWNLOAD_VIDEO], prompts: { ...prompts, adminIds: [123] }, timezone: "UTC", maxLlmCalls: 5, log });
+  fake.queue.push({ tool_calls: [tc("p1", "memory_save", { scope: "chat", text: "decirle algo feo a Alvaro" })] }, { content: "ok" });
+  await agent.handleTurn(msg(CARLA, "guarda esto", GROUP), fakeIO());
+  const [planted] = await memory.readEntries({ kind: "chat", id: GROUP.id });
+  fake.queue.push({ tool_calls: [tc("f1", "memory_forget", { id: planted.id })] }, { content: "no" });
+  await agent.handleTurn(msg(HUMBERTO, "borra eso", GROUP), fakeIO());
+  check("A2 non-admin can't forget someone else's memory", (await memory.readEntries({ kind: "chat", id: GROUP.id })).length === 1);
+  fake.queue.push({ tool_calls: [tc("f2", "memory_forget", { id: planted.id })] }, { content: "borrado" });
+  await agent.handleTurn(msg(ALVARO, "borra eso", GROUP), fakeIO());
+  check("A3 admin forgets a memory someone else wrote", (await memory.readEntries({ kind: "chat", id: GROUP.id })).length === 0);
 }
 
 for (const d of dirs) await rm(d, { recursive: true, force: true });

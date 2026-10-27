@@ -128,8 +128,10 @@ export function createAgentToolExecutor({ memory, people, telegramInfo, turn }) 
   // Least privilege: a member deletes what they wrote, or what is about them.
   // Nothing else, so an injected "forget everything about X" cannot wipe what
   // another member left.
+  // Admins (tagged in users.md) may forget anything visible, so a planted
+  // "rule" can be removed even when someone else wrote it.
   const mayForget = (entry, partition) =>
-    entry.by === turn.speakerId || (partition.kind === "user" && partition.id === turn.speakerId);
+    turn.isAdmin === true || entry.by === turn.speakerId || (partition.kind === "user" && partition.id === turn.speakerId);
 
   async function forget({ id }) {
     const wanted = String(id ?? "").replace(/^\[|\]$/g, "");
