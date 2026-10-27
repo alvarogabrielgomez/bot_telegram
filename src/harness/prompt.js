@@ -26,6 +26,12 @@ async function readPromptFile(dir, name, { optional = false } = {}) {
   return { text, bytes };
 }
 
+// users.md lines tagged "· admin" ("- id 123 · Name · admin · ...") name the people
+// who may manage every memory, e.g. forget an entry someone else wrote.
+export function adminIdsFrom(usersText) {
+  return [...usersText.matchAll(/^- id (\d+) ·.*· admin(?= ·|\s*$)/gm)].map((m) => Number(m[1]));
+}
+
 export async function loadPromptFiles(dir, { log }) {
   const soul = await readPromptFile(dir, "soul.md");
   const system = await readPromptFile(dir, "system.md");
@@ -35,7 +41,7 @@ export async function loadPromptFiles(dir, { log }) {
   if (total > PROMPT_FILES_WARN_BYTES) {
     log.warn({ bytes: total, warnAt: PROMPT_FILES_WARN_BYTES }, "soul.md, system.md and users.md together are large; every message pays for them");
   }
-  return { soul: soul.text, system: system.text, users: users.text };
+  return { soul: soul.text, system: system.text, users: users.text, adminIds: adminIdsFrom(users.text) };
 }
 
 // The body of one memory block: its lines, a pointer to what did not fit, or

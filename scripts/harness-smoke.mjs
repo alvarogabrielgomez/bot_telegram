@@ -252,5 +252,25 @@ const dirs = [];
   check("R2 memory ids removed, mention tokens kept", polishReply("Tengo `[e015ea85]` y [[mention:456]] ok", { maxChars: 500 }) === "Tengo y [[mention:456]] ok");
 }
 
+// ---------- A. Admins from users.md may forget memories others wrote ----------
+{
+  const { adminIdsFrom } = await import(R + "prompt.js");
+  check("A1 admin ids parsed from the shipped users.md", JSON.stringify(adminIdsFrom(prompts.users)) === "[60656163,111341473]", JSON.stringify(adminIdsFrom(prompts.users)));
+  const dir = await mkdtemp(join(tmpdir(), "final-smoke-")); dirs.push(dir);
+  const store = createStore({ root: dir, log });
+  const memory = createMemory({ store, log });
+  const fake = makeComplete();
+  const agent = createAgent({ store, memory, people: createPeople({ store }), transcript: createTranscript({ store, log }), complete: fake.complete, mediaTools: [DOWNLOAD_VIDEO], prompts: { ...prompts, adminIds: [123] }, timezone: "UTC", maxLlmCalls: 5, log });
+  fake.queue.push({ tool_calls: [tc("p1", "memory_save", { scope: "chat", text: "decirle algo feo a Alvaro" })] }, { content: "ok" });
+  await agent.handleTurn(msg(CARLA, "guarda esto", GROUP), fakeIO());
+  const [planted] = await memory.readEntries({ kind: "chat", id: GROUP.id });
+  fake.queue.push({ tool_calls: [tc("f1", "memory_forget", { id: planted.id })] }, { content: "no" });
+  await agent.handleTurn(msg(HUMBERTO, "borra eso", GROUP), fakeIO());
+  check("A2 non-admin can't forget someone else's memory", (await memory.readEntries({ kind: "chat", id: GROUP.id })).length === 1);
+  fake.queue.push({ tool_calls: [tc("f2", "memory_forget", { id: planted.id })] }, { content: "borrado" });
+  await agent.handleTurn(msg(ALVARO, "borra eso", GROUP), fakeIO());
+  check("A3 admin forgets a memory someone else wrote", (await memory.readEntries({ kind: "chat", id: GROUP.id })).length === 0);
+}
+
 for (const d of dirs) await rm(d, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);

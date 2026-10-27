@@ -53,7 +53,7 @@ export function createAgent({
   transcript,
   complete,
   mediaTools,
-  prompts: { soul, system, users = "" },
+  prompts: { soul, system, users = "", adminIds = [] },
   timezone,
   maxLlmCalls,
   maxReplyChars = 500,
@@ -207,7 +207,7 @@ export function createAgent({
       memory,
       people,
       telegramInfo: io.telegramInfo,
-      turn: { chatId, speakerId: input.speaker.id, origin: { kind: isPrivate ? "private" : "group", chatId } },
+      turn: { chatId, speakerId: input.speaker.id, isAdmin: adminIds.includes(input.speaker.id), origin: { kind: isPrivate ? "private" : "group", chatId } },
     });
     // A tool result can carry text a user, a memory entry or a web page wrote.
     // It reaches the model as a marked data block. The messages the harness
