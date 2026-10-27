@@ -15,7 +15,7 @@ import {
 } from "./limits.js";
 import { runLoop } from "./loop.js";
 import { buildContextMessage, buildSystemPrompt } from "./prompt.js";
-import { mentionIds, renderReply } from "./reply.js";
+import { mentionIds, polishReply, renderReply } from "./reply.js";
 import { FileCapError } from "./store.js";
 import { checkMediaUrl } from "./toolGuards.js";
 import { entriesFromMessages, groupTurns, renderHistory, renderTurn, selectRecent } from "./transcript.js";
@@ -56,6 +56,7 @@ export function createAgent({
   prompts: { soul, system, users = "" },
   timezone,
   maxLlmCalls,
+  maxReplyChars = 500,
   now = () => new Date(),
   log,
 }) {
@@ -218,7 +219,8 @@ export function createAgent({
     };
     // Renders [[mention:ID]] tokens and posts the text; send_message and the
     // final reply both go through here. Returns how many Telegram messages went out.
-    const deliverText = async (raw) => {
+    const deliverText = async (draft) => {
+      const raw = polishReply(draft, { maxChars: maxReplyChars });
       // The prompt lists only some people (in a DM, just the speaker). A registry
       // person the model mentions by id must still render as a name, so look the
       // missing ids up. In a group, an id the registry doesn't know may still be a

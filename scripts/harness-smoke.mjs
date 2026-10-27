@@ -242,5 +242,15 @@ const dirs = [];
   check("M3 unknown id reported back to the model as dropped", /mention of id 31337 was dropped/.test(notes[1] ?? ""), notes[1]);
 }
 
+// ---------- R. Reply polish: hard length cap, no Markdown, no memory ids ----------
+{
+  const { polishReply } = await import(R + "reply.js");
+  const long = "**Alvaro** es caótico. ".repeat(40) + "Fin.";
+  const out = polishReply(long, { maxChars: 500 });
+  check("R1 long reply cut under the cap at a sentence end", out.length <= 500 && out.endsWith("."), `${out.length} chars`);
+  check("R1 Markdown bold removed", !out.includes("**"));
+  check("R2 memory ids removed, mention tokens kept", polishReply("Tengo `[e015ea85]` y [[mention:456]] ok", { maxChars: 500 }) === "Tengo y [[mention:456]] ok");
+}
+
 for (const d of dirs) await rm(d, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
