@@ -309,6 +309,19 @@ const dirs = [];
   check("V6 the tic-free rewrite goes out", io7.sent[0]?.text === "Diagnóstico: exceso de entusiasmo humano.", io7.sent[0]?.text);
 }
 
+// ---------- T. "typing…" while working, off once the reply is out ----------
+{
+  const s = await setup(); dirs.push(s.dir);
+  const events = [];
+  const io = fakeIO();
+  io.startTyping = () => { events.push("typing on"); return () => events.push("typing off"); };
+  const send = io.send;
+  io.send = async (chunk) => { events.push("send"); return send(chunk); };
+  s.fake.queue.push({ content: "Diagnóstico: todo en orden." });
+  await s.agent.handleTurn(msg(ALVARO, "clanker estás?", GROUP), io);
+  check("T1 typing starts before the reply and stops right after it", events.slice(0, 3).join(",") === "typing on,send,typing off", events.join(","));
+}
+
 // ---------- A. Admins from users.md may forget memories others wrote ----------
 {
   const { adminIdsFrom } = await import(R + "prompt.js");

@@ -389,6 +389,8 @@ export function createAgent({
       if (last?.role === "assistant" && !last.tool_calls?.length) added = [...added.slice(0, -1), { ...last, content: text }];
       await deliverText(text);
     }
+    // The answer is out; saving and compacting aren't "typing".
+    io.stopTyping?.();
 
     await transcript.appendTurn(chatId, [userEntry, ...entriesFromMessages(added, now())]);
     log.info({ chatId, llmCalls: result.calls, tools: result.toolCalls.map((c) => c.name) }, "turn done");
@@ -397,7 +399,16 @@ export function createAgent({
   }
 
   return {
-    handleTurn: (input, io) => store.withLock(`chat:${input.chat.id}`, () => runTurn(input, io)),
+    // The "typing…" status starts at once, even while this turn waits for an
+    // earlier one in the same chat, and stops as soon as the reply is out.
+    handleTurn: async (input, io) => {
+      const stopTyping = io.startTyping?.() ?? (() => {});
+      try {
+        return await store.withLock(`chat:${input.chat.id}`, () => runTurn(input, { ...io, stopTyping }));
+      } finally {
+        stopTyping();
+      }
+    },
 
     // Forgets the conversation of one chat. Long-term memory stays.
     reset: (chatId) => store.withLock(`chat:${chatId}`, () => transcript.clear(chatId)),
