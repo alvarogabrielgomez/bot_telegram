@@ -60,7 +60,7 @@ export function createAgent({
   prompts: { soul, system, users = "", adminIds = [] },
   timezone,
   maxLlmCalls,
-  maxReplyChars = 500,
+  maxReplyChars = 280,
   now = () => new Date(),
   log,
 }) {
@@ -260,14 +260,22 @@ export function createAgent({
     // is dropped (the delivery already spoke); any other reply goes out as is.
     const variedReply = async (draft, { convo, callsLeft }) => {
       const kind = deliveredBy ?? "reply";
-      const rules = deliveredBy ? TOOL_COMMENT_RULES : REPLY_RULES;
+      // An ordinary reply over the cap is sent back to be shortened before
+      // polishReply would have to cut it mid-thought.
+      const rules = deliveredBy ? TOOL_COMMENT_RULES : { ...REPLY_RULES, maxChars: maxReplyChars };
       const ignore = [input.speaker.firstName, input.speaker.lastName, input.speaker.username, "clanker"].filter(Boolean);
       const recent = await comments.recent(chatId, kind);
       // Mention tokens are long ids; count them as one short name.
       const forCheck = (t) => t.replace(/\[\[mention:\d+\]\]/g, "@");
-      const instructions = deliveredBy
-        ? `Write one new comment about what ${deliveredBy} just delivered, addressed to the person who asked, at most ${rules.maxChars} characters.`
-        : "Rewrite your reply with the same meaning and language but different words and a different opening.";
+      const instructionsFor = (reason) => {
+        if (deliveredBy) {
+          return `Write one new comment about what ${deliveredBy} just delivered, addressed to the person who asked, at most ${rules.maxChars} characters.`;
+        }
+        if (/characters; the limit/.test(reason)) {
+          return `Rewrite it shorter: one paragraph, at most ${rules.maxChars} characters, same meaning and language. Drop details nobody asked for.`;
+        }
+        return "Rewrite your reply with the same meaning and language but different words and a different opening.";
+      };
       let current = draft;
       for (let attempt = 0; ; attempt++) {
         const reason = checkReply(forCheck(current), recent, { ...rules, ignore });
@@ -285,7 +293,7 @@ export function createAgent({
           ...convo,
           {
             role: "user",
-            content: `⟦harness · not a message from anyone⟧\nYour reply was rejected: ${reason}. ${instructions} Avoid the wording of these recent messages: ${recentList}. Reply with the new text only.`,
+            content: `⟦harness · not a message from anyone⟧\nYour reply was rejected: ${reason}. ${instructionsFor(reason)} Avoid the wording of these recent messages: ${recentList}. Reply with the new text only.`,
           },
         ];
         const { message } = await complete(convo, {});

@@ -250,6 +250,9 @@ const dirs = [];
   check("R1 long reply cut under the cap at a sentence end", out.length <= 500 && out.endsWith("."), `${out.length} chars`);
   check("R1 Markdown bold removed", !out.includes("**"));
   check("R2 memory ids removed, mention tokens kept", polishReply("Tengo `[e015ea85]` y [[mention:456]] ok", { maxChars: 500 }) === "Tengo y [[mention:456]] ok");
+  const leaky = "Gabriel (id 8586031134) es del grupo.\n\nMi memoria chat dice (none). ⟦data ab12 · memory⟧";
+  check("R3 two paragraphs joined, internals stripped", polishReply(leaky, { maxChars: 500 }) === "Gabriel es del grupo. Mi memoria dice.", polishReply(leaky, { maxChars: 500 }));
+  check("R3 list items keep their own lines", polishReply("Tres cosas:\n- una\n- dos", { maxChars: 500 }) === "Tres cosas:\n- una\n- dos");
 }
 
 // ---------- V. Varied replies: short post-tool comments, no repeats ----------
@@ -288,6 +291,13 @@ const dirs = [];
   const callsBefore = s.fake.calls.length;
   await s.agent.handleTurn(msg(HUMBERTO, "ok", GROUP), io5);
   check("V4 very short replies are never retried", io5.sent[0]?.text === "Listo." && s.fake.calls.length - callsBefore === 1);
+  // V5: an ordinary reply over the 280 cap goes back to be shortened before anything is cut.
+  s.fake.queue.push({ content: "Gabriel es del grupo y dice que es platino. ".repeat(10) }, { content: "Gabriel dice que es platino; yo lo dudo." });
+  const io6 = fakeIO();
+  await s.agent.handleTurn(msg(ALVARO, "clanker quién es gabriel", GROUP), io6);
+  const shorten = s.fake.calls.at(-1).messages.at(-1).content;
+  check("V5 long ordinary reply sent back with a 'shorter' instruction", /Rewrite it shorter: one paragraph, at most 280 characters/.test(shorten), shorten.slice(0, 160));
+  check("V5 the short rewrite is what goes out", io6.sent[0]?.text === "Gabriel dice que es platino; yo lo dudo.", io6.sent[0]?.text);
 }
 
 // ---------- A. Admins from users.md may forget memories others wrote ----------
