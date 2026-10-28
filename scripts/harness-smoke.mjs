@@ -322,6 +322,33 @@ const dirs = [];
   check("T1 typing starts before the reply and stops right after it", events.slice(0, 3).join(",") === "typing on,send,typing off", events.join(","));
 }
 
+// ---------- N. Labels a small model can't misread ----------
+{
+  const s = await setup(); dirs.push(s.dir);
+  const HUMB = { id: 456, is_bot: false, first_name: "Humberto", username: "Wololo_aeyoyo" };
+  s.fake.queue.push({ content: "hola" });
+  await s.agent.handleTurn(msg(HUMB, "hola", GROUP), fakeIO());
+  const text = "@Wololo_aeyoyo y @nadie_aqui nunca quisieron ser DM";
+  const input = turnInputFromMessage(
+    { message_id: msgId++, from: ALVARO, chat: GROUP, date: 1793000000 + msgId, text, entities: [{ type: "mention", offset: 0, length: 14 }, { type: "mention", offset: 17, length: 11 }] },
+    { botId: 999, botUsername: "clanker_bot", text },
+  );
+  s.fake.queue.push({ content: "ok" });
+  await s.agent.handleTurn(input, fakeIO());
+  const msgs = s.fake.calls.at(-1).messages;
+  check("N1 @username resolved to the person in the label", /⟦mentions: Humberto · @Wololo_aeyoyo · id 456; @nadie_aqui \(unknown to you\)⟧/.test(msgs.at(-1).content), msgs.at(-1).content.split("\n")[1]);
+  check("N2 context message comes before the history", msgs[1].content.startsWith("⟦harness context") && msgs.at(-1).content.startsWith("⟦from:"));
+  const bare = turnInputFromMessage({ message_id: msgId++, from: ALVARO, chat: GROUP, date: 1793000000 + msgId, text: "Clanker", reply_to_message: { message_id: 1, from: { id: 999, is_bot: true, first_name: "Bot" }, text: "un video" } }, { botId: 999, text: "" });
+  s.fake.queue.push({ content: "¿Qué pasa?" });
+  await s.agent.handleTurn(bare, fakeIO());
+  const last = s.fake.calls.at(-1).messages.at(-1).content;
+  check("N3 reply to the bot reads as its own earlier message", last.includes('⟦replying to your earlier message: "un video"⟧'));
+  check("N3 a message that was only the trigger says so", last.endsWith("(no other text: they just called you)"));
+  await s.agent.recordFailure(msg(ALVARO, "algo", GROUP), "Algo falló de mi lado con eso. Inténtalo otra vez.");
+  const stored = (await s.transcript.load(GROUP.id)).entries.slice(-2);
+  check("N4 a failed turn is stored with the notice as the bot's own reply", stored[0]?.type === "user" && stored[1]?.type === "assistant" && stored[1].text.startsWith("Algo falló"));
+}
+
 // ---------- A. Admins from users.md may forget memories others wrote ----------
 {
   const { adminIdsFrom } = await import(R + "prompt.js");

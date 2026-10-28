@@ -112,6 +112,27 @@ export function createAgent({
 
   // Mention only people the chat can actually reach: the speaker in private,
   // current members in a group. Everyone else renders as a plain name.
+  // The stored user message. @username mentions are resolved against the people
+  // the bot knows here, so the label says who "@Wololo_aeyoyo" is instead of
+  // leaving a small model to guess. replyTo.text goes in full; it is cut when
+  // the turn is written to disk.
+  function userEntryFor(input, candidates) {
+    const byHandle = new Map(candidates.filter((p) => p.username).map((p) => [p.username.toLowerCase(), p]));
+    const mentions = [
+      ...input.mentioned.map((person) => ({ person })),
+      ...(input.handles ?? []).map((handle) => (byHandle.has(handle) ? { person: byHandle.get(handle) } : { handle })),
+    ].filter((m, i, all) => !m.person || all.findIndex((n) => n.person?.id === m.person.id) === i);
+    return {
+      type: "user",
+      ts: input.date.toISOString(),
+      messageId: input.messageId,
+      from: input.speaker,
+      replyTo: input.replyTo,
+      ...(mentions.length ? { mentions } : {}),
+      text: input.text,
+    };
+  }
+
   async function mentionableIds(text, input, known, io) {
     const mentionable = new Set();
     const isPrivate = input.chat.type === "private";
@@ -184,15 +205,7 @@ export function createAgent({
     );
     const known = new Map([...extraPeople, ...listed, input.speaker].map((p) => [p.id, p]));
 
-    // replyTo.text goes in full; it is cut when the turn is written to disk.
-    const userEntry = {
-      type: "user",
-      ts: input.date.toISOString(),
-      messageId: input.messageId,
-      from: input.speaker,
-      replyTo: input.replyTo,
-      text: input.text,
-    };
+    const userEntry = userEntryFor(input, [...known.values()]);
     // One nonce per turn marks every data block of this turn. The model sees it
     // only inside the prompt, which the people who write the data cannot read.
     const nonce = newNonce();
@@ -203,8 +216,10 @@ export function createAgent({
         role: "system",
         content: buildSystemPrompt({ soul, system, users, input, people: listed, extraPeople, timezone, now: now() }),
       },
+      // Oldest first: memory and the summary of earlier turns, then the recent
+      // turns, then the new message last, right where the model answers.
+      buildContextMessage({ nonce, input, memory: snapshots, summary, names: known }),
       ...renderHistory(recent, { timezone }),
-      buildContextMessage({ nonce, input, memory: snapshots, summary }),
       ...renderTurn([userEntry], { timezone }),
     ];
 
@@ -412,5 +427,17 @@ export function createAgent({
 
     // Forgets the conversation of one chat. Long-term memory stays.
     reset: (chatId) => store.withLock(`chat:${chatId}`, () => transcript.clear(chatId)),
+
+    // A turn that failed sent the user an error notice the model never saw. Keep
+    // both in the transcript so a later "wtf?" reads as a reply to the bot's own
+    // message, not to some outside "system".
+    recordFailure: (input, notice) =>
+      store.withLock(`chat:${input.chat.id}`, async () => {
+        const candidates = await people.inChat(input.chat.id);
+        await transcript.appendTurn(input.chat.id, [
+          userEntryFor(input, [...candidates, input.speaker]),
+          { type: "assistant", ts: now().toISOString(), text: notice },
+        ]);
+      }),
   };
 }
